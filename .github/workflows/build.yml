@@ -1,0 +1,143 @@
+name: Build Firmware
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.4.3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build Firmware
+        run: |
+          . ${IDF_PATH}/export.sh
+          idf.py set-target esp32s3
+          idf.py build
+
+      - name: Generate SPIFFS
+        run: |
+          python ${IDF_PATH}/components/spiffs/spiffsgen.py 0x3CE000 main/web_ui build/spiffs.bin
+
+      - name: Prepare Artifacts
+        run: |
+          mkdir -p firmware
+          cp build/bootloader/bootloader.bin firmware/
+          cp build/partition_table/partition-table.bin firmware/
+          cp build/esp32s3_a10_camera.bin firmware/firmware.bin
+          cp build/spiffs.bin firmware/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-binaries
+          path: firmware/
+          retention-days: 30
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware-binaries
+          path: firmware/
+
+      - name: Create Flash Script
+        run: |
+          cat > flash_all.sh << 'SCRIPT'
+          #!/bin/bash
+          # MiBeeCam ESP32-S3-A10 Flash Script
+          # Usage: ./flash_all.sh /dev/ttyUSB0
+          PORT=${1:-/dev/ttyUSB0}
+          echo "Flashing MiBeeCam firmware to $PORT..."
+          esptool.py --chip esp32s3 -p "$PORT" -b 460800 --before default_reset --after hard_reset write_flash \
+            0x0 firmware/bootloader.bin \
+            0x8000 firmware/partition-table.bin \
+            0x10000 firmware/firmware.bin \
+            0x392000 firmware/spiffs.bin
+          echo "Done! Reset the device to start."
+          SCRIPT
+          chmod +x flash_all.sh
+
+      - name: Create Flash Script (Windows)
+        run: |
+          cat > flash_all.bat << 'SCRIPT'
+          @echo off
+          set PORT=%1
+          if "%PORT%=="" set PORT=COM3
+          echo Flashing MiBeeCam firmware to %PORT%...
+          esptool.py --chip esp32s3 -p %PORT% -b 460800 --before default_reset --after hard_reset write_flash 0x0 firmware\bootloader.bin 0x8000 firmware\partition-table.bin 0x10000 firmware\firmware.bin 0x392000 firmware\spiffs.bin
+          echo Done! Reset the device to start.
+          SCRIPT
+
+      - name: Generate Checksums
+        run: |
+          cd firmware
+          sha256sum *.bin > ../checksums.txt
+          cd ..
+
+      - name: Generate Release Notes
+        run: |
+          cat > RELEASE_NOTES.md << EOF
+          ## MiBeeCam Firmware ${{ github.ref_name }}
+
+          ### Flash Instructions
+          1. Download all files from this release
+          2. **Linux/Mac**: `chmod +x flash_all.sh && ./flash_all.sh /dev/ttyUSB0`
+          3. **Windows**: `flash_all.bat COM3` (replace COM3 with your port)
+          4. Or use ESP-IDF: `idf.py -p COMx flash` (Windows)
+
+          ### Files
+          | File | Description |
+          |------|-------------|
+          | firmware.bin | Main firmware |
+          | bootloader.bin | ESP32 bootloader |
+          | partition-table.bin | Partition table |
+          | spiffs.bin | Web UI files |
+          | flash_all.sh | Flash script (Linux/Mac) |
+          | flash_all.bat | Flash script (Windows) |
+          | checksums.txt | SHA256 checksums |
+
+          ### Partition Layout
+          | Offset | Size | Content |
+          |--------|------|---------|
+          | 0x0 | - | Bootloader |
+          | 0x8000 | - | Partition Table |
+          | 0x10000 | 3.5MB | Firmware |
+          | 0x392000 | 3.94MB | SPIFFS (Web UI) |
+
+          ### First-time Setup
+          1. Flash firmware and SPIFFS
+          2. Device starts AP mode: SSID=MiBeeCam, Password=12345678
+          3. Connect to AP, open http://192.168.4.1
+          4. Configure WiFi credentials
+          5. Device reboots in STA mode
+          EOF
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ github.ref_name }} \
+            firmware/bootloader.bin \
+            firmware/partition-table.bin \
+            firmware/firmware.bin \
+            firmware/spiffs.bin \
+            flash_all.sh \
+            flash_all.bat \
+            checksums.txt \
+            --title "MiBeeCam ${{ github.ref_name }}" \
+            --notes-file RELEASE_NOTES.md

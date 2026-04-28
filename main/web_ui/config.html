@@ -1,0 +1,117 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>MiBeeCam - 配置</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f5f3ff;color:#1e1b4b;padding-bottom:68px}
+.hd{background:linear-gradient(135deg,#7C3AED,#6D28D9);color:#fff;padding:16px 20px;display:flex;align-items:center;justify-content:space-between}.hd h1{font-size:18px;font-weight:600}.hd .ver{font-size:11px;opacity:.7}
+.ct{max-width:600px;margin:0 auto;padding:12px 16px}
+.cd{background:#fff;border-radius:8px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(124,58,237,.1)}
+.cd h3{font-size:14px;color:#7C3AED;margin-bottom:12px}
+.fg{margin-bottom:14px}.fg:last-child{margin-bottom:0}
+.fg label{display:block;font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500}
+.fg input,.fg select{width:100%;padding:10px 12px;border:1px solid #e9e5ff;border-radius:6px;font-size:14px;background:#faf9ff;color:#1e1b4b;outline:none;transition:border .2s}
+.fg input:focus,.fg select:focus{border-color:#7C3AED}
+.fg .pw-wrap{position:relative}.fg .pw-wrap input{padding-right:36px}
+.fg .pw-wrap .eye{position:absolute;right:8px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:16px;color:#9ca3af;user-select:none}
+.range-row{display:flex;align-items:center;gap:10px}
+.range-row input[type=range]{flex:1;padding:0;height:6px;-webkit-appearance:none;background:#e9e5ff;border-radius:3px;border:none}
+.range-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;background:#7C3AED;border-radius:50%;cursor:pointer}
+.range-row .rv{min-width:32px;text-align:center;font-size:13px;font-weight:600;color:#7C3AED}
+.btn-row{display:flex;gap:10px;margin-top:4px}
+.btn{flex:1;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .2s}.btn:active{opacity:.7}
+.btn.pri{background:#7C3AED;color:#fff}.btn.dan{background:#fef2f2;color:#dc2626;border:1px solid #fecaca}
+.nb{position:fixed;bottom:0;left:0;right:0;background:#fff;display:flex;border-top:1px solid #e9e5ff;padding:6px 0;box-shadow:0 -2px 8px rgba(0,0,0,.06)}
+.nb a{flex:1;text-align:center;text-decoration:none;color:#9ca3af;font-size:11px;padding:4px 0}.nb a.on{color:#7C3AED}
+.nb svg{width:22px;height:22px;display:block;margin:0 auto 2px}
+.toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#1e1b4b;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:99;opacity:0;transition:opacity .3s}.toast.show{opacity:1}
+</style></head><body>
+<div class="hd"><h1>MiBeeCam</h1><span class="ver">v0.1</span></div>
+<div class="ct" id="main"><div style="text-align:center;padding:40px;color:#9ca3af;font-size:13px">加载中...</div></div>
+<div class="toast" id="toast"></div>
+<div class="nb">
+<a href="/index.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>仪表盘</a>
+<a href="/config.html" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>配置</a>
+<a href="/preview.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>预览</a>
+</div>
+<script>
+function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2500)}
+function toggleEye(el){
+  var inp=el.parentElement.getElementsByTagName('input')[0];
+  inp.type=inp.type==='password'?'text':'password'
+}
+var RES_OPTIONS=[[0,'VGA (640x480)'],[1,'SVGA (800x600)'],[2,'XGA (1024x768)'],[3,'UXGA (1600x1200)']];
+var TZ_OPTIONS=[['CST-8','中国标准 (UTC+8)'],['UTC','UTC'],['UTC-5','EST (UTC-5)'],['UTC-8','PST (UTC-8)'],['UTC+9','JST (UTC+9)'],['UTC+0','GMT (UTC+0)'],['UTC+1','CET (UTC+1)']];
+function loadConfig(){
+  fetch('/api/config').then(function(r){return r.json()}).then(function(d){
+    var h='';
+    h+='<form id="cfgForm" onsubmit="return saveConfig(event)">';
+    // WiFi
+    h+='<div class="cd"><h3>WiFi 配置</h3>';
+    h+='<div class="fg"><label>SSID</label><input type="text" id="wifi_ssid" value="'+(d.wifi_ssid||'')+'" required></div>';
+    h+='<div class="fg"><label>密码</label><div class="pw-wrap"><input type="password" id="wifi_pass" value="" placeholder="不修改则留空"><span class="eye" onclick="toggleEye(this)">Show</span></div></div>';
+    h+='</div>';
+    // Server
+    h+='<div class="cd"><h3>服务器上传</h3>';
+    h+='<div class="fg"><label>服务器 URL</label><input type="text" id="server_url" value="'+(d.server_url||'')+'" placeholder="http://..."></div>';
+    h+='</div>';
+    // Camera
+    h+='<div class="cd"><h3>摄像头参数</h3>';
+    h+='<div class="fg"><label>分辨率</label><select id="resolution">';
+    for(var i=0;i<RES_OPTIONS.length;i++){var sel=d.resolution===RES_OPTIONS[i][0]?' selected':'';h+='<option value="'+RES_OPTIONS[i][0]+'"'+sel+'>'+RES_OPTIONS[i][1]+'</option>'}
+    h+='</select></div>';
+    h+='<div class="fg"><label>FPS</label><div class="range-row"><input type="range" id="fps" min="1" max="30" value="'+(d.fps||15)+'" oninput="document.getElementById(\'fps_v\').textContent=this.value"><span class="rv" id="fps_v">'+(d.fps||15)+'</span></div></div>';
+    h+='<div class="fg"><label>JPEG 质量</label><div class="range-row"><input type="range" id="jpeg_quality" min="1" max="63" value="'+(d.jpeg_quality||12)+'" oninput="document.getElementById(\'jq_v\').textContent=this.value"><span class="rv" id="jq_v">'+(d.jpeg_quality||12)+'</span></div></div>';
+    h+='</div>';
+    // Motion
+    h+='<div class="cd"><h3>移动检测</h3>';
+    h+='<div class="fg"><label>检测阈值</label><input type="number" id="motion_threshold" min="1" max="100" value="'+(d.motion_threshold||5)+'"></div>';
+    h+='<div class="fg"><label>冷却时间 (秒)</label><input type="number" id="motion_cooldown" min="1" max="3600" value="'+(d.motion_cooldown||10)+'"></div>';
+    h+='</div>';
+    // System
+    h+='<div class="cd"><h3>系统设置</h3>';
+    h+='<div class="fg"><label>设备名称</label><input type="text" id="device_name" value="'+(d.device_name||'')+'"></div>';
+    h+='<div class="fg"><label>时区</label><select id="timezone">';
+    for(var j=0;j<TZ_OPTIONS.length;j++){var sel2=d.timezone===TZ_OPTIONS[j][0]?' selected':'';h+='<option value="'+TZ_OPTIONS[j][0]+'"'+sel2+'>'+TZ_OPTIONS[j][1]+'</option>'}
+    h+='</select></div>';
+    h+='</div>';
+    // Buttons
+    h+='<div class="btn-row"><button type="submit" class="btn pri">保存配置</button><button type="button" class="btn dan" onclick="factoryReset()">恢复出厂</button><button type="button" class="btn sec" onclick="rebootDevice()">重启设备</button></div>';
+    h+='</form>';
+    document.getElementById('main').innerHTML=h
+  }).catch(function(){toast('加载失败')})
+}
+function saveConfig(e){
+  e.preventDefault();
+  var body={
+    wifi_ssid:document.getElementById('wifi_ssid').value,
+    server_url:document.getElementById('server_url').value,
+    device_name:document.getElementById('device_name').value,
+    resolution:parseInt(document.getElementById('resolution').value),
+    fps:parseInt(document.getElementById('fps').value),
+    jpeg_quality:parseInt(document.getElementById('jpeg_quality').value),
+    timezone:document.getElementById('timezone').value,
+    motion_threshold:parseInt(document.getElementById('motion_threshold').value),
+    motion_cooldown:parseInt(document.getElementById('motion_cooldown').value)
+  };
+  var wp=document.getElementById('wifi_pass').value;if(wp)body.wifi_pass=wp;
+  fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+  .then(function(r){return r.json()}).then(function(d){
+    if(d.success){toast('保存成功');setTimeout(loadConfig,1000)}
+    else toast(d.message||'保存失败')
+  }).catch(function(){toast('保存失败')});
+  return false
+}
+function factoryReset(){
+  if(!confirm('确定恢复出厂设置？所有配置将被重置。'))return;
+  fetch('/api/reset',{method:'POST'}).then(function(r){return r.json()}).then(function(d){
+    if(d.success){toast('已恢复出厂设置');setTimeout(loadConfig,1000)}
+    else toast(d.message||'操作失败')
+  }).catch(function(){toast('操作失败')})
+}
+loadConfig();
+function rebootDevice(){
+  if(!confirm('确定重启设备？'))return;
+  fetch('/api/reboot',{method:'POST'}).then(function(r){return r.json()}).then(function(d){
+    if(d.success)toast('设备正在重启...');
+    else toast(d.message||'操作失败')
+  }).catch(function(){toast('操作失败')})
+}
+
+</script></body></html>

@@ -1,0 +1,104 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>MiBeeCam - 实时预览</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f0b1a;color:#e9e5ff;padding-bottom:68px}
+.hd{background:linear-gradient(135deg,#7C3AED,#6D28D9);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between}.hd h1{font-size:18px;font-weight:600}.hd .ver{font-size:11px;opacity:.7}
+.ct{max-width:860px;margin:0 auto;padding:12px 12px}
+.stream-wrap{background:#000;border-radius:8px;overflow:hidden;position:relative;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center}
+.stream-wrap img{width:100%;height:100%;object-fit:contain;display:block}
+.status-bar{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(124,58,237,.15);border-radius:8px;margin-top:10px}
+.status-left{display:flex;align-items:center;gap:8px;font-size:13px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot.on{background:#10b981;box-shadow:0 0 6px #10b981}.dot.off{background:#ef4444}.dot.wait{background:#f59e0b;animation:pls 1s infinite}
+@keyframes pls{0%,100%{opacity:1}50%{opacity:.3}}
+.fps{font-size:13px;color:#a78bfa;font-weight:600}
+.ctrl-row{display:flex;gap:10px;margin-top:10px}
+.btn{flex:1;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .2s}.btn:active{opacity:.7}
+.btn.pri{background:#7C3AED;color:#fff}.btn.sec{background:rgba(255,255,255,.1);color:#e9e5ff}
+.overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(15,11,26,.8);color:#a78bfa;font-size:14px;gap:8px}
+.nb{position:fixed;bottom:0;left:0;right:0;background:#1a1230;display:flex;border-top:1px solid rgba(124,58,237,.3);padding:6px 0;box-shadow:0 -2px 8px rgba(0,0,0,.3)}
+.nb a{flex:1;text-align:center;text-decoration:none;color:#6b7280;font-size:11px;padding:4px 0}.nb a.on{color:#7C3AED}
+.nb svg{width:22px;height:22px;display:block;margin:0 auto 2px}
+</style></head><body>
+<div class="hd"><h1>MiBeeCam</h1><span class="ver">v0.1</span></div>
+<div class="ct">
+<div class="stream-wrap" id="streamWrap">
+  <img id="stream" src="" alt="">
+  <div class="overlay" id="overlay"><span>正在连接...</span></div>
+</div>
+<div class="status-bar">
+  <div class="status-left"><span class="dot wait" id="statusDot"></span><span id="statusText">连接中</span></div>
+  <div class="fps" id="fpsDisplay">-- FPS</div>
+</div>
+<div class="ctrl-row">
+  <button class="btn sec" onclick="toggleFullscreen()">全屏</button>
+  <button class="btn pri" onclick="captureNow()">拍照</button>
+</div>
+</div>
+<div class="nb">
+<a href="/index.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>仪表盘</a>
+<a href="/config.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>配置</a>
+<a href="/preview.html" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>预览</a>
+</div>
+<script>
+var connected=false,reconnectTimer=null,frameCount=0,lastFpsTime=Date.now(),fpsInterval=null;
+var img=document.getElementById('stream');
+var overlay=document.getElementById('overlay');
+var dot=document.getElementById('statusDot');
+var statusText=document.getElementById('statusText');
+var fpsDisplay=document.getElementById('fpsDisplay');
+
+function setStatus(s,msg){
+  dot.className='dot '+(s==='on'?'on':s==='off'?'off':'wait');
+  statusText.textContent=msg;
+  overlay.style.display=s==='on'?'none':'flex';
+  if(s!=='on')overlay.getElementsByTagName('span')[0].textContent=msg
+}
+
+function startStream(){
+  setStatus('wait','正在连接...');
+  img.onload=function(){
+    if(!connected){connected=true;setStatus('on','已连接')}
+    frameCount++
+  };
+  img.onerror=function(){
+    if(connected){connected=false;setStatus('off','连接断开');scheduleReconnect()}
+  };
+  img.src='/stream?t='+Date.now()
+}
+
+function stopStream(){
+  img.onload=null;img.onerror=null;img.src='';connected=false;
+  if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null}
+}
+
+function scheduleReconnect(){
+  if(reconnectTimer)return;
+  setStatus('wait','3秒后重连...');
+  reconnectTimer=setTimeout(function(){reconnectTimer=null;startStream()},3000)
+}
+
+function startFpsCounter(){
+  fpsInterval=setInterval(function(){
+    var now=Date.now(),elapsed=(now-lastFpsTime)/1000;
+    var fps=Math.round(frameCount/elapsed);
+    fpsDisplay.textContent=fps+' FPS';
+    frameCount=0;lastFpsTime=now
+  },1000)
+}
+
+function toggleFullscreen(){
+  var w=document.getElementById('streamWrap');
+  if(!document.fullscreenElement){w.requestFullscreen&&w.requestFullscreen()}
+  else{document.exitFullscreen&&document.exitFullscreen()}
+}
+
+function captureNow(){
+  var a=document.createElement('a');a.href='/capture';a.download='capture_'+Date.now()+'.jpg';a.click()
+}
+
+window.addEventListener('beforeunload',function(){stopStream();if(fpsInterval)clearInterval(fpsInterval)});
+
+// Handle img load error for initial connection failure
+img.onerror=function(){setStatus('off','连接失败');scheduleReconnect()};
+
+startStream();startFpsCounter();
+</script></body></html>
