@@ -1,0 +1,62 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>MiBeeCam</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f5f3ff;color:#1e1b4b;padding-bottom:68px}
+.hd{background:linear-gradient(135deg,#7C3AED,#6D28D9);color:#fff;padding:16px 20px;display:flex;align-items:center;justify-content:space-between}.hd h1{font-size:18px;font-weight:600}.hd .ver{font-size:11px;opacity:.7}
+.ct{max-width:600px;margin:0 auto;padding:12px 16px}
+.cd{background:#fff;border-radius:8px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(124,58,237,.1)}
+.cd h3{font-size:14px;color:#7C3AED;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f3f0ff;font-size:13px}.row:last-child{border-bottom:none}
+.row .lb{color:#6b7280}.row .vl{color:#1e1b4b;font-weight:500}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%}.dot.on{background:#10b981;box-shadow:0 0 6px #10b981}.dot.off{background:#ef4444}
+.dot.pulse{animation:pls 1.5s infinite}@keyframes pls{0%,100%{opacity:1}50%{opacity:.4}}
+.btn-row{display:flex;gap:10px;margin-top:4px}
+.btn{flex:1;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .2s}
+.btn:active{opacity:.7}.btn.pri{background:#7C3AED;color:#fff}.btn.sec{background:#ede9fe;color:#6D28D9}
+.nb{position:fixed;bottom:0;left:0;right:0;background:#fff;display:flex;border-top:1px solid #e9e5ff;padding:6px 0;box-shadow:0 -2px 8px rgba(0,0,0,.06)}
+.nb a{flex:1;text-align:center;text-decoration:none;color:#9ca3af;font-size:11px;padding:4px 0}.nb a.on{color:#7C3AED}
+.nb svg{width:22px;height:22px;display:block;margin:0 auto 2px}
+.toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#1e1b4b;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:99;opacity:0;transition:opacity .3s}.toast.show{opacity:1}
+.loading{text-align:center;padding:40px;color:#9ca3af;font-size:13px}
+</style></head><body>
+<div class="hd"><h1>MiBeeCam</h1><span class="ver">v0.1</span></div>
+<div class="ct" id="main"><div class="loading">加载中...</div></div>
+<div class="toast" id="toast"></div>
+<div class="nb">
+<a href="/index.html" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>仪表盘</a>
+<a href="/config.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>配置</a>
+<a href="/preview.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>预览</a>
+</div>
+<script>
+function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2000)}
+function fmtTime(s){var h=Math.floor(s/3600),m=Math.floor(s%3600/60),sec=Math.floor(s%60);return h+'时'+m+'分'+sec+'秒'}
+function loadStatus(){
+  fetch('/api/status').then(function(r){return r.json()}).then(function(d){
+    var wifiOn=d.wifi_state==='connected';
+    var html='<div class="cd"><h3><span class="dot '+(wifiOn?'on pulse':'off')+'"></span>WiFi 状态</h3>';
+    html+='<div class="row"><span class="lb">SSID</span><span class="vl">'+(d.wifi_ssid||'-')+'</span></div>';
+    html+='<div class="row"><span class="lb">状态</span><span class="vl">'+(wifiOn?'<span class="dot on"></span> 已连接':'<span class="dot off"></span> 未连接')+'</span></div>';
+    html+='<div class="row"><span class="lb">IP</span><span class="vl">'+(d.ip||'-')+'</span></div>';
+    if(wifiOn){
+      html+='<div class="row"><span class="lb">RSSI</span><span class="vl">'+d.wifi_rssi+' dBm</span></div>';
+      html+='<div class="row"><span class="lb">信道</span><span class="vl">'+d.wifi_channel+'</span></div>'
+    }
+    html+='</div>';
+    html+='<div class="cd"><h3>摄像头信息</h3>';
+    html+='<div class="row"><span class="lb">传感器</span><span class="vl">'+(d.camera||'-')+'</span></div>';
+    html+='<div class="row"><span class="lb">分辨率</span><span class="vl">'+(d.resolution||'-')+'</span></div>';
+    html+='</div>';
+    html+='<div class="cd"><h3>系统信息</h3>';
+    html+='<div class="row"><span class="lb">运行时间</span><span class="vl">'+fmtTime(d.uptime)+'</span></div>';
+    html+='<div class="row"><span class="lb">芯片温度</span><span class="vl">'+(d.chip_temp!=null?d.chip_temp.toFixed(1)+'°C':'-')+'</span></div>';
+    html+='</div>';
+    html+='<div class="cd"><h3>快捷操作</h3><div class="btn-row">';
+    html+='<button class="btn pri" onclick="doCapture()">拍照</button>';
+    html+='<button class="btn sec" onclick="location.href=\'/preview.html\'">实时预览</button>';
+    html+='</div></div>';
+    document.getElementById('main').innerHTML=html;
+  }).catch(function(){toast('加载失败')})
+}
+function doCapture(){
+  var a=document.createElement('a');a.href='/capture';a.download='capture.jpg';a.click()
+}
+loadStatus();setInterval(loadStatus,10000);
+</script></body></html>
