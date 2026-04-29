@@ -481,11 +481,114 @@ idf.py monitor
 2. Verify stream endpoint registration
 3. Check client count limit
 4. Check network bandwidth
+5. **Check frame buffer contention** (see Issue 4 below)
 
 **Debug Commands**:
 ```bash
 curl -I http://192.168.1.100/stream
 # Should return 200 with multipart content type
+```
+
+### 4. MJPEG Preview Freezes After <1 Second (Frame Buffer Contention)
+
+**Problem**: `/preview.html` shows video for less than 1 second, then freezes. Server-side `/stream` endpoint may still return data.
+
+**Root Cause**: Frame buffer contention. With PSRAM disabled, camera uses DRAM with `fb_count=1` (single frame buffer). Motion detection holds the buffer for ~1.5s while trying to capture a second frame for comparison, starving the MJPEG streamer. `esp_camera_fb_get()` times out and returns NULL, breaking the stream.
+
+**Contributing Factors**:
+
+| Factor | Impact |
+|--------|--------|
+| PSRAM disabled | DRAM only, ~137KB free — enough for only one VGA frame buffer (~60KB) |
+| `fb_count=1` | Only one task can hold the frame buffer at a time |
+| Old motion detect logic | Captures fb_a → waits 500ms → captures fb_b → compares → releases. With 1 buffer, fb_b can never be acquired |
+| No retry in streamer | Single capture failure causes `break`, terminating the entire stream |
+| `STREAM_FRAME_DELAY` | Extra 66ms artificial delay per frame, further reducing FPS |
+
+**Fix**:
+
+1. **Motion detection: sample-and-release pattern** (`motion_detect.c`)
+   ```c
+   // OLD (deadlocks with single buffer):
+   fb_a = capture();         // holds buffer
+   delay(500ms);             // other tasks starved
+   fb_b = capture();         // can never acquire → timeout
+   compare(fb_a, fb_b);
+   release(fb_a, fb_b);
+
+   // NEW (sample-and-release):
+   fb_a = capture();
+   samples = malloc(sample_count);  // small buffer (~3KB)
+   copy_samples(fb_a->buf, samples); // extract key bytes
+   release(fb_a);             // release immediately!
+   delay(500ms);
+   fb_b = capture();          // now succeeds
+   compare(samples, fb_b);
+   release(fb_b);
+   free(samples);
+   ```
+
+2. **Pause motion detection during streaming** (`motion_detect.c`)
+   ```c
+   while (s_running) {
+       if (mjpeg_streamer_get_client_count() > 0) {
+           vTaskDelay(pdMS_TO_TICKS(500));
+           continue;
+       }
+       // ... normal motion detection
+   }
+   ```
+
+3. **Stream capture retry + remove artificial delay** (`mjpeg_streamer.c`)
+   ```c
+   // Retry logic on capture failure
+   for (retries = 0; retries < 3; retries++) {
+       ret = camera_capture(&fb);
+       if (ret == ESP_OK) break;
+       vTaskDelay(pdMS_TO_TICKS(50));
+   }
+
+   // Minimal yield instead of fixed delay
+   vTaskDelay(pdMS_TO_TICKS(1));  // watchdog + task switch only
+   ```
+
+4. **Preview page liveness indicator** (`preview.html`)
+   ```javascript
+   // MJPEG <img> onload fires only once; can't count frames.
+   // Use canvas pixel-change detection instead:
+   setInterval(function() {
+       ctx.drawImage(img, 0, 0, 40, 30);
+       var sample = ctx.getImageData(0, 0, 40, 30).data;
+       if (pixelsChanged(sample, lastSample)) {
+           fpsDisplay.textContent = '● LIVE';
+       }
+   }, 500);
+   ```
+
+**Results**:
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Preview | Freezes <1s | Continuously updating |
+| Stream throughput | ~10 KB/s | ~36 KB/s |
+| Frame rate | ~0.35 FPS | ~6 FPS |
+
+**Key Takeaways**:
+- With `fb_count=1`, the frame buffer is a global exclusive resource — never hold it longer than necessary
+- Cross-frame comparison algorithms must: capture → extract features to separate memory → release buffer immediately
+- ESP-IDF `httpd` is single-threaded; streaming blocks all other HTTP requests (API inaccessible) — this is a design limitation, not a bug
+- Browser `<img>` tag with MJPEG stream fires `onload` only once — cannot use for FPS counting
+
+**Verification**:
+```bash
+# 1. Server-side throughput test
+curl -s --max-time 5 http://192.168.1.100/stream -o /dev/null -w 'Bytes: %{size_download}\nRate: %{speed_download} B/s\n'
+
+# 2. Browser pixel-change detection (run in browser console)
+var c=document.createElement('canvas');c.width=40;c.height=30;
+var x=c.getContext('2d');x.drawImage(document.getElementById('stream'),0,0,40,30);
+console.log(Array.from(x.getImageData(0,0,5,1).data));
+# Wait 3 seconds, run again — pixel values should differ
 ```
 
 ### 4. Image Upload Failure
@@ -506,17 +609,8 @@ curl -X POST http://server.com/upload -H "X-Device-ID: test" --data-binary @test
 
 ### 1. Slow Frame Rate
 **Problem**: Camera frame rate lower than expected  
-**Root Cause**: Network bandwidth or CPU constraints  
-**Solution**: Optimize JPEG quality and frame rate
-
-**Fix**:
-```c
-// Reduce JPEG quality for better performance
-#define JPEG_QUALITY 20  // Higher number = smaller file, lower quality
-
-// Reduce frame rate
-#define FRAME_RATE 10  // FPS instead of 15
-```
+**Root Cause**: Network bandwidth, CPU constraints, or frame buffer contention (see Issue 4 above)  
+**Solution**: Optimize JPEG quality, check buffer contention, remove artificial delays
 
 ### 2. Memory Fragmentation
 **Problem**: System becomes unstable over time  
