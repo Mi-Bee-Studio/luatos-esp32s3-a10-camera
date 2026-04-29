@@ -22,6 +22,7 @@
 #include "motion_detect.h"
 #include "camera_driver.h"
 #include "config_manager.h"
+#include "mjpeg_streamer.h"
 
 static const char *TAG = "motion_detect";
 
@@ -44,45 +45,6 @@ static bool s_in_cooldown = false;
 static int64_t s_cooldown_start_us = 0;
 
 /* ---- Internal helpers ---- */
-
-/**
- * @brief Compare two raw JPEG buffers by sampling bytes.
- *
- * Iterates through min(len_a, len_b) at SAMPLE_STEP intervals,
- * counting positions where the absolute byte difference exceeds PIXEL_DELTA.
- *
- * @param a          First buffer
- * @param a_len      Length of first buffer
- * @param b          Second buffer
- * @param b_len      Length of second buffer
- * @param threshold  Percentage threshold (0-100) to trigger motion
- * @return true if motion is detected (changed% >= threshold)
- */
-static bool compare_frames(const uint8_t *a, size_t a_len,
-                           const uint8_t *b, size_t b_len,
-                           uint8_t threshold)
-{
-    size_t min_len = (a_len < b_len) ? a_len : b_len;
-    size_t total = 0;
-    size_t changed = 0;
-
-    for (size_t i = 0; i < min_len; i += SAMPLE_STEP) {
-        total++;
-        if (abs((int)a[i] - (int)b[i]) > PIXEL_DELTA) {
-            changed++;
-        }
-    }
-
-    if (total == 0) {
-        return false;
-    }
-
-    uint8_t percent = (uint8_t)((changed * 100) / total);
-    ESP_LOGD(TAG, "Frame diff: %u/%u = %u%% (threshold=%u%%)",
-             (unsigned)changed, (unsigned)total, percent, threshold);
-
-    return percent >= threshold;
-}
 
 /**
  * @brief Upload a JPEG buffer to the configured server via HTTP POST.
@@ -165,6 +127,12 @@ static void motion_detection_task(void *arg)
     ESP_LOGI(TAG, "Motion detection task started");
 
     while (s_running) {
+        /* Skip motion detection while MJPEG stream is active */
+        if (mjpeg_streamer_get_client_count() > 0) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+
         /* Wait for camera to be ready */
         if (!camera_is_initialized()) {
             vTaskDelay(pdMS_TO_TICKS(1000));
@@ -172,6 +140,12 @@ static void motion_detection_task(void *arg)
         }
 
         const cam_config_t *cfg = config_get();
+
+        /* --- Single-buffer-safe capture sequence ---
+         * With fb_count=1 we cannot hold two frame buffers simultaneously.
+         * Strategy: sample bytes from fb_a into a small malloc'd array,
+         * return fb_a immediately, then capture fb_b and compare.
+         */
 
         /* Capture reference frame */
         camera_fb_t *fb_a = NULL;
@@ -181,6 +155,27 @@ static void motion_detection_task(void *arg)
             continue;
         }
 
+        /* Sample bytes from fb_a for later comparison (every SAMPLE_STEP bytes) */
+        size_t a_len = fb_a->len;
+        size_t sample_count = (a_len + SAMPLE_STEP - 1) / SAMPLE_STEP;
+        uint8_t *samples_a = NULL;
+        if (sample_count > 0) {
+            samples_a = (uint8_t *)malloc(sample_count);
+        }
+        if (samples_a == NULL) {
+            ESP_LOGW(TAG, "Failed to allocate sample buffer (%u bytes)", (unsigned)sample_count);
+            camera_return_fb(fb_a);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+        for (size_t i = 0, j = 0; i < a_len && j < sample_count; i += SAMPLE_STEP, j++) {
+            samples_a[j] = fb_a->buf[i];
+        }
+
+        /* Return fb_a IMMEDIATELY — free the frame buffer for other tasks */
+        camera_return_fb(fb_a);
+        fb_a = NULL;
+
         /* Wait between captures for detectable change */
         vTaskDelay(pdMS_TO_TICKS(500));
 
@@ -188,19 +183,32 @@ static void motion_detection_task(void *arg)
         camera_fb_t *fb_b = NULL;
         if (camera_capture(&fb_b) != ESP_OK || fb_b == NULL) {
             ESP_LOGW(TAG, "Failed to capture comparison frame");
-            camera_return_fb(fb_a);
+            free(samples_a);
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
 
-        /* Compare frames for motion */
-        bool motion = compare_frames(fb_a->buf, fb_a->len,
-                                     fb_b->buf, fb_b->len,
-                                     cfg->motion_threshold);
+        /* Compare saved samples against fb_b */
+        size_t min_len = (a_len < fb_b->len) ? a_len : fb_b->len;
+        size_t total = 0;
+        size_t changed = 0;
+        for (size_t i = 0, j = 0; i < min_len && j < sample_count; i += SAMPLE_STEP, j++) {
+            total++;
+            if (abs((int)samples_a[j] - (int)fb_b->buf[i]) > PIXEL_DELTA) {
+                changed++;
+            }
+        }
+        bool motion = false;
+        if (total > 0) {
+            uint8_t percent = (uint8_t)((changed * 100) / total);
+            motion = percent >= cfg->motion_threshold;
+            ESP_LOGD(TAG, "Frame diff: %u/%u = %u%% (threshold=%u%%)",
+                     (unsigned)changed, (unsigned)total, percent, cfg->motion_threshold);
+        }
 
-        /* Always free both buffers */
-        camera_return_fb(fb_a);
+        /* Free fb_b and sample buffer */
         camera_return_fb(fb_b);
+        free(samples_a);
 
         if (motion && !s_in_cooldown) {
             ESP_LOGI(TAG, "Motion detected!");

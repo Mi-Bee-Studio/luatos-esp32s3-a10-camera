@@ -18,6 +18,7 @@ MiBeeCam is a smart camera system built on ESP-IDF v5.4.3 for the ESP32-S3-A10 d
 <p align="center">
     <img src="docs/images/index-dashboard.png" alt="MiBeeCam Dashboard" width="640">
 </p>
+
 - **Motion Detection** — Frame-difference algorithm with configurable threshold and cooldown
 - **Remote Upload** — Automatic JPEG upload on motion trigger, 3 retries with 2 s interval
 - **Configuration** — NVS-persisted settings managed through web UI or REST API

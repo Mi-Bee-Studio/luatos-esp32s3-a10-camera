@@ -77,10 +77,17 @@ esp_err_t mjpeg_streamer_http_handler(httpd_req_t *req)
     char part_hdr[128];
 
     while (1) {
-        /* Capture frame */
-        esp_err_t ret = camera_capture(&fb);
+        /* Capture frame with retry (buffer may be temporarily unavailable) */
+        esp_err_t ret;
+        int retries;
+        for (retries = 0; retries < 3; retries++) {
+            ret = camera_capture(&fb);
+            if (ret == ESP_OK) break;
+            ESP_LOGD(TAG, "Capture retry %d/3", retries + 1);
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Camera capture failed, ending stream");
+            ESP_LOGW(TAG, "Camera capture failed after %d retries, ending stream", retries);
             break;
         }
 
@@ -122,8 +129,8 @@ esp_err_t mjpeg_streamer_http_handler(httpd_req_t *req)
             break;
         }
 
-        /* Frame-rate throttle (also feeds the watchdog) */
-        vTaskDelay(STREAM_FRAME_DELAY);
+        /* Brief yield for watchdog and task switching */
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     /* --- Cleanup --- */
