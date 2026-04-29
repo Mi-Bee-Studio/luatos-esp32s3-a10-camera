@@ -5,7 +5,7 @@
 # --------------------------------------------
 # 构建输出目录
 # --------------------------------------------
-build/                      # ESP-IDF 默认构建目录
+build/
 out/                        # 输出目录
 output/                     # 输出目录
 dist/                       # 分发目录
@@ -13,8 +13,10 @@ dist/                       # 分发目录
 # --------------------------------------------
 # ESP-IDF 生成的配置文件
 # --------------------------------------------
-sdkconfig                   # 编译生成的完整 sdkconfig（sdkconfig.defaults 保留）
-sdkconfig.old               # 旧版本 sdkconfig 备份
+sdkconfig
+# 编译生成的完整 sdkconfig（sdkconfig.defaults 保留）
+sdkconfig.old
+# 旧版本 sdkconfig 备份
 
 # --------------------------------------------
 # 二进制和固件文件
@@ -80,7 +82,7 @@ compile_commands.json       # 编译数据库（自动生成）
 # 保留 sdkconfig.defaults 作为模板，但忽略实际使用的 sdkconfig
 # 这样每个开发者可以根据自己的环境配置，同时保留默认配置作为参考
 
-verify_hardware.bat         # 开发用硬件验证脚本
+verify_hardware.bat
 
 # --------------------------------------------
 # Internal development files
@@ -90,6 +92,7 @@ verify_hardware.bat         # 开发用硬件验证脚本
 AGENTS.md
 tmp/
 .vscode/
+.playwright-mcp/
 
 # --------------------------------------------
 # ESP-IDF component manager

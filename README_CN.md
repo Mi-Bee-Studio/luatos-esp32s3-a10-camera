@@ -16,6 +16,7 @@ MiBeeCam 是基于 ESP-IDF v5.4.3 开发的智能摄像头系统，专为 ESP32-
 <p align="center">
     <img src="docs/images/index-dashboard.png" alt="MiBeeCam 仪表盘" width="640">
 </p>
+
 - **MJPEG 流媒体** — 通过 `/stream` 端点实现最高 15 FPS 实时视频
 - **运动检测** — 帧差算法，可配置阈值和冷却时间
 - **远程上传** — 运动触发时自动 JPEG 上传，3 次重试间隔 2 秒

@@ -39,7 +39,7 @@
 <a href="/preview.html" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>预览</a>
 </div>
 <script>
-var connected=false,reconnectTimer=null,frameCount=0,lastFpsTime=Date.now(),fpsInterval=null;
+var connected=false,reconnectTimer=null,lastPixelSample=null,pixelChangeCount=0,lastCheckTime=Date.now(),checkInterval=null;
 var img=document.getElementById('stream');
 var overlay=document.getElementById('overlay');
 var dot=document.getElementById('statusDot');
@@ -57,7 +57,6 @@ function startStream(){
   setStatus('wait','正在连接...');
   img.onload=function(){
     if(!connected){connected=true;setStatus('on','已连接')}
-    frameCount++
   };
   img.onerror=function(){
     if(connected){connected=false;setStatus('off','连接断开');scheduleReconnect()}
@@ -76,13 +75,23 @@ function scheduleReconnect(){
   reconnectTimer=setTimeout(function(){reconnectTimer=null;startStream()},3000)
 }
 
-function startFpsCounter(){
-  fpsInterval=setInterval(function(){
-    var now=Date.now(),elapsed=(now-lastFpsTime)/1000;
-    var fps=Math.round(frameCount/elapsed);
-    fpsDisplay.textContent=fps+' FPS';
-    frameCount=0;lastFpsTime=now
-  },1000)
+function startLivenessCheck(){
+  var canvas=document.createElement('canvas');canvas.width=40;canvas.height=30;
+  var ctx=canvas.getContext('2d');
+  checkInterval=setInterval(function(){
+    if(!connected||!img.naturalWidth)return;
+    ctx.drawImage(img,0,0,40,30);
+    var d=ctx.getImageData(0,0,40,30).data;
+    var sample=d[0]*1000+d[1]*100+d[2]+d[3];
+    if(lastPixelSample!==null&&sample!==lastPixelSample){pixelChangeCount++}
+    lastPixelSample=sample;
+    var now=Date.now(),elapsed=(now-lastCheckTime)/1000;
+    if(elapsed>=1.5){
+      var changes=Math.round(pixelChangeCount/elapsed);
+      fpsDisplay.textContent=changes>0?'● LIVE':'...';
+      pixelChangeCount=0;lastCheckTime=now
+    }
+  },500)
 }
 
 function toggleFullscreen(){
@@ -95,10 +104,10 @@ function captureNow(){
   var a=document.createElement('a');a.href='/capture';a.download='capture_'+Date.now()+'.jpg';a.click()
 }
 
-window.addEventListener('beforeunload',function(){stopStream();if(fpsInterval)clearInterval(fpsInterval)});
+window.addEventListener('beforeunload',function(){stopStream();if(checkInterval)clearInterval(checkInterval)});
 
 // Handle img load error for initial connection failure
 img.onerror=function(){setStatus('off','连接失败');scheduleReconnect()};
 
-startStream();startFpsCounter();
+startStream();startLivenessCheck();
 </script></body></html>
