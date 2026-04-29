@@ -216,6 +216,7 @@ curl -X POST http://192.168.1.100/api/reboot
 | SPIFFS 挂载失败 | 分区不匹配 | 确保 SPIFFS 偏移量（0x392000）与 `partitions.csv` 匹配 |
 | Web UI 显示乱码 | HTML 中的 Unicode 转义 | 将 `\uXXXX` 替换为实际的 UTF-8 字符 |
 | 误运动触发 | 阈值太低 | 在 Web UI 配置中提高运动阈值 |
+| 预览不到1秒定格 | 帧缓冲区争用（`fb_count=1`） | 采样即释放模式；流传输时暂停运动检测 |
 
 详细信息请参阅 [docs/zh-CN/troubleshooting.md](docs/zh-CN/troubleshooting.md)。
 

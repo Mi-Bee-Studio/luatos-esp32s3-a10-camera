@@ -336,6 +336,112 @@ printf("Min heap: %d bytes\n", esp_get_minimum_free_heap_size());
 
 ---
 
+### 问题 15: MJPEG 预览画面不到1秒就卡住定格
+
+**现象**: 访问 `/preview.html` 预览页面，视频画面显示不到1秒后定格不动，但服务端 `/stream` 端点仍可返回数据
+
+**原因**: 帧缓冲区争用导致流断流。由于 PSRAM 不可用，摄像头使用 DRAM 且 `fb_count=1`（单帧缓冲区）。运动检测任务在比较两帧时持有帧缓冲区约 1.5 秒，此期间 MJPEG 流无法获取缓冲区，`esp_camera_fb_get()` 超时返回 NULL，流传输中断。
+
+**深层原因分析**:
+
+| 因素 | 影响 |
+|------|------|
+| PSRAM 禁用 | 只能用 DRAM，~137KB 可用空间仅够一个 VGA 帧缓冲 (~60KB) |
+| `fb_count=1` | 同一时刻只能有一个任务持有帧缓冲区 |
+| 运动检测旧逻辑 | 获取 fb_a → 等待 500ms → 获取 fb_b → 比较 → 释放。单缓冲下 fb_b 永远拿不到 |
+| MJPEG 流无重试 | 一次捕获失败就 `break` 退出循环，整个流终止 |
+| `STREAM_FRAME_DELAY` | 每帧额外 66ms 人为延迟，进一步降低帧率 |
+
+**解决方案**:
+
+1. **运动检测：采样即释放模式**（`motion_detect.c`）
+   ```c
+   // 旧逻辑（单缓冲下死锁）:
+   fb_a = capture();         // 持有缓冲区
+   delay(500ms);             // 持有期间其他任务无法获取
+   fb_b = capture();         // 永远拿不到 → 超时
+   compare(fb_a, fb_b);
+   release(fb_a, fb_b);
+
+   // 新逻辑（采样即释放）:
+   fb_a = capture();
+   samples = malloc(sample_count);  // 分配小块采样缓冲区 (~3KB)
+   copy_samples(fb_a->buf, samples); // 采样关键字节
+   release(fb_a);             // 立即释放！
+   delay(500ms);
+   fb_b = capture();          // 现在可以获取到了
+   compare(samples, fb_b);
+   release(fb_b);
+   free(samples);
+   ```
+
+2. **流传输期间暂停运动检测**（`motion_detect.c`）
+   ```c
+   while (s_running) {
+       // 有流客户端时完全跳过运动检测
+       if (mjpeg_streamer_get_client_count() > 0) {
+           vTaskDelay(pdMS_TO_TICKS(500));
+           continue;
+       }
+       // ... 正常运动检测逻辑
+   }
+   ```
+
+3. **流捕获重试 + 去除人为延迟**（`mjpeg_streamer.c`）
+   ```c
+   // 添加重试逻辑
+   for (retries = 0; retries < 3; retries++) {
+       ret = camera_capture(&fb);
+       if (ret == ESP_OK) break;
+       vTaskDelay(pdMS_TO_TICKS(50));  // 短暂等待后重试
+   }
+
+   // 移除 STREAM_FRAME_DELAY，改为最小让步
+   vTaskDelay(pdMS_TO_TICKS(1));  // 仅喂看门狗 + 任务切换
+   ```
+
+4. **预览页面实时状态指示**（`preview.html`）
+   ```javascript
+   // MJPEG <img> 的 onload 只触发一次，无法计数帧率
+   // 改用 canvas 像素变化检测
+   setInterval(function() {
+       ctx.drawImage(img, 0, 0, 40, 30);
+       var sample = ctx.getImageData(0, 0, 40, 30).data;
+       if (pixelsChanged(sample, lastSample)) {
+           fpsDisplay.textContent = '● LIVE';
+       }
+   }, 500);
+   ```
+
+**修复效果**:
+
+| 指标 | 修复前 | 修复后 |
+|------|--------|--------|
+| 预览画面 | 不到1秒定格 | 持续刷新 |
+| 流吞吐量 | ~10 KB/s | ~36 KB/s |
+| 帧率 | ~0.35 FPS | ~6 FPS |
+| 浏览器像素变化 | 无（冻结） | 每3秒可检测到变化 |
+
+**关键经验**:
+
+- `fb_count=1` 时，帧缓冲区是全局独占资源，任何任务持有时间都不能超过必要最小值
+- 需要跨帧比较的算法必须：获取帧 → 提取特征数据到独立内存 → 立即释放帧缓冲区
+- ESP-IDF 的 `httpd` 是单线程的，流传输期间会阻塞所有其他 HTTP 请求（API 不可访问），这是设计限制而非 bug
+- 浏览器 `<img>` 标签加载 MJPEG 流时 `onload` 只触发一次，不能用于帧率计算
+
+**验证方法**:
+```bash
+# 1. 服务端测试流吞吐量
+curl -s --max-time 5 http://192.168.61.173/stream -o /dev/null -w 'Bytes: %{size_download}\nRate: %{speed_download} B/s\n'
+
+# 2. 浏览器像素变化检测（在浏览器控制台执行）
+var c=document.createElement('canvas');c.width=40;c.height=30;
+var x=c.getContext('2d');x.drawImage(document.getElementById('stream'),0,0,40,30);
+console.log(Array.from(x.getImageData(0,0,5,1).data));
+# 等3秒后再执行一次，像素值应发生变化
+```
+
+---
 ### 问题 12: xQueueGenericSend 初始启动崩溃
 
 **现象**: 设备首次启动时，运动检测任务与摄像头任务之间的竞争条件导致崩溃
@@ -492,6 +598,7 @@ idf.py build memory-report
 | 编译问题 | 中 | 中 | 100% |
 | 存储问题 | 中 | 中 | 100% |
 | 图像问题 | 低 | 中 | 90% |
+| 帧缓冲区争用 | 中 | 高 | 100% |
 
 ---
 
@@ -507,6 +614,9 @@ idf.py build memory-report
 8. **定期检查内存使用情况**
 9. **使用正确的串口参数**
 10. **验证分区表配置**
+11. **帧缓冲区用完即释放，不要跨帧持有**
+12. **单缓冲模式下，使用采样即释放模式替代双帧持有**
+13. **流传输期间暂停运动检测，避免缓冲区争用**
 
 ---
 

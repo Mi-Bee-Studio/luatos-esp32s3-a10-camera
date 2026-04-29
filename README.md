@@ -217,6 +217,7 @@ The firmware follows a 14-step initialization:
 | SPIFFS mount fails | Partition mismatch | Ensure SPIFFS offset (0x392000) matches `partitions.csv` |
 | Web UI shows garbled text | Unicode escapes in HTML | Replace `\uXXXX` with actual UTF-8 characters |
 | False motion triggers | Threshold too low | Increase motion threshold in web UI config |
+| Preview freezes <1s | Frame buffer contention (`fb_count=1`) | Use sample-and-release pattern; pause motion detection during streaming |
 
 See [docs/en/troubleshooting.md](docs/en/troubleshooting.md) for detailed solutions.
 
