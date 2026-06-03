@@ -49,6 +49,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/download-artifact@v4
         with:
@@ -91,16 +94,44 @@ jobs:
 
       - name: Generate Release Notes
         run: |
-          cat > RELEASE_NOTES.md << EOF
-          ## MiBeeCam Firmware ${{ github.ref_name }}
+          PREV_TAG=$(git tag --sort=-creatordate | head -2 | tail -1 2>/dev/null || echo "")
+          CURRENT_TAG="${{ github.ref_name }}"
 
-          ### Flash Instructions
+          cat > RELEASE_NOTES.md << EOF
+          # MiBeeCam Firmware ${CURRENT_TAG}
+
+          ---
+
+          ## What's Changed
+
+          EOF
+
+          if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$CURRENT_TAG" ]; then
+            echo "" >> RELEASE_NOTES.md
+            echo '```' >> RELEASE_NOTES.md
+            git log --oneline --no-decorate ${PREV_TAG}..HEAD >> RELEASE_NOTES.md
+            echo '```' >> RELEASE_NOTES.md
+            echo "" >> RELEASE_NOTES.md
+            echo "### Files Changed" >> RELEASE_NOTES.md
+            echo '```' >> RELEASE_NOTES.md
+            git diff --stat ${PREV_TAG}..HEAD >> RELEASE_NOTES.md
+            echo '```' >> RELEASE_NOTES.md
+            echo "" >> RELEASE_NOTES.md
+          else
+            echo "Initial release." >> RELEASE_NOTES.md
+            echo "" >> RELEASE_NOTES.md
+          fi
+
+          cat >> RELEASE_NOTES.md << 'EOF'
+          ## Flash Instructions
+
           1. Download all files from this release
           2. **Linux/Mac**: `chmod +x flash_all.sh && ./flash_all.sh /dev/ttyUSB0`
           3. **Windows**: `flash_all.bat COM3` (replace COM3 with your port)
           4. Or use ESP-IDF: `idf.py -p COMx flash` (Windows)
 
-          ### Files
+          ## Files
+
           | File | Description |
           |------|-------------|
           | firmware.bin | Main firmware |
@@ -111,7 +142,8 @@ jobs:
           | flash_all.bat | Flash script (Windows) |
           | checksums.txt | SHA256 checksums |
 
-          ### Partition Layout
+          ## Partition Layout
+
           | Offset | Size | Content |
           |--------|------|---------|
           | 0x0 | - | Bootloader |
@@ -119,7 +151,8 @@ jobs:
           | 0x10000 | 3.5MB | Firmware |
           | 0x392000 | 3.94MB | SPIFFS (Web UI) |
 
-          ### First-time Setup
+          ## First-time Setup
+
           1. Flash firmware and SPIFFS
           2. Device starts AP mode: SSID=MiBeeCam, Password=12345678
           3. Connect to AP, open http://192.168.4.1
