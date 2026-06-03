@@ -30,15 +30,14 @@ static esp_timer_handle_t s_retry_timer = NULL;
 
 // STA reconnect state
 static int s_retry_count = 0;
-#define MAX_RETRY 5
 #define RETRY_DELAY_S 5
+#define RETRY_LOG_INTERVAL 10  // Log every N retries
 
 // --- Forward declarations ---
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data);
 static void notify_state(wifi_state_t new_state);
 static void wifi_retry_timer_callback(void *arg);
-static void wifi_fallback_to_ap(void);
 
 // --- Helper ---
 static void set_state(wifi_state_t new_state)
@@ -53,7 +52,7 @@ static void set_state(wifi_state_t new_state)
 // --- Retry timer callback ---
 static void IRAM_ATTR wifi_retry_timer_callback(void *arg)
 {
-    ESP_LOGI(TAG, "Non-blocking retry: attempt %d/%d", s_retry_count, MAX_RETRY);
+    ESP_LOGI(TAG, "Non-blocking retry: attempt %d", s_retry_count);
     esp_wifi_connect();
 }
 
@@ -64,13 +63,12 @@ static void notify_state(wifi_state_t new_state)
     }
 }
 
-// --- Fallback to AP after STA failure ---
-static void wifi_fallback_to_ap(void)
+// --- Infinite retry (no AP fallback) ---
+static void wifi_schedule_retry(void)
 {
-    wifi_stop_retry();
-    ESP_LOGE(TAG, "WiFi connection failed after %d retries. Starting AP mode for configuration", MAX_RETRY);
-    set_state(WIFI_STATE_STA_FAILED);
-    wifi_start_ap();
+    ESP_LOGI(TAG, "STA retry scheduled (%d attempts, retrying indefinitely)", s_retry_count);
+    set_state(WIFI_STATE_STA_DISCONNECTED);
+    esp_timer_start_once(s_retry_timer, RETRY_DELAY_S * 1000000);
 }
 
 // --- Event handler ---
@@ -91,15 +89,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             break;
 
         case WIFI_EVENT_STA_DISCONNECTED: {
+            wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)event_data;
             s_retry_count++;
-            if (s_retry_count < MAX_RETRY) {
-                ESP_LOGW(TAG, "STA disconnected, non-blocking retry scheduled (attempt %d/%d)",
-                         s_retry_count, MAX_RETRY);
-                set_state(WIFI_STATE_STA_DISCONNECTED);
-                esp_timer_start_once(s_retry_timer, RETRY_DELAY_S * 1000000);
-            } else {
-                wifi_fallback_to_ap();
+            // Log every RETRY_LOG_INTERVAL attempts, or first few
+            if (s_retry_count <= 3 || s_retry_count % RETRY_LOG_INTERVAL == 0) {
+                ESP_LOGW(TAG, "STA disconnected, reason=%d (0x%x), retrying (attempt %d, no fallback)",
+                         disconn->reason, disconn->reason, s_retry_count);
             }
+            wifi_schedule_retry();
             break;
         }
 
@@ -250,7 +247,7 @@ esp_err_t wifi_start_sta(const char *ssid, const char *pass)
         .sta = {
             .ssid = "",
             .password = "",
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            .threshold.authmode = WIFI_AUTH_OPEN,  // Accept any auth mode (WPA2, WPA3, WPA2/WPA3 mixed, etc.)
         },
     };
 

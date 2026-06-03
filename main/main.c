@@ -85,23 +85,14 @@ static void wifi_state_cb(wifi_state_t state, void *user_data)
         break;
 
     case WIFI_STATE_STA_DISCONNECTED:
-        /* Don't change LED — let reconnect handle it */
+        /* Keep showing connecting LED — will retry indefinitely */
+        led_set_status(LED_WIFI_CONNECTING);
         break;
 
     case WIFI_STATE_STA_FAILED:
-        ESP_LOGW(TAG, "STA mode failed permanently, falling back to AP");
-        led_set_status(LED_PERMANENT_FAILURE);
-
-        /* Web server may already be running; if not, start it for AP config */
-        if (!s_web_server_started) {
-            esp_err_t ret = web_server_start(80);
-            if (ret == ESP_OK) {
-                s_web_server_started = true;
-                ESP_LOGI(TAG, "Web server started (fallback AP mode)");
-            } else {
-                ESP_LOGE(TAG, "Web server start failed in fallback: %s", esp_err_to_name(ret));
-            }
-        }
+        /* Should never happen — infinite retry, no fallback */
+        ESP_LOGW(TAG, "STA failed state reached (unexpected with infinite retry)");
+        led_set_status(LED_WIFI_CONNECTING);
         break;
     }
 }
