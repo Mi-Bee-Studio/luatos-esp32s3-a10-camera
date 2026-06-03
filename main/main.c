@@ -28,6 +28,7 @@ static const char *TAG = "main";
 static bool s_web_server_started = false;
 static bool s_motion_started = false;
 static bool s_time_sync_started = false;
+static bool s_mjpeg_initialized = false;
 
 /* ---------------------------------------------------------------------------
  * WiFi state callback — updates LED and triggers post-connection services
@@ -85,6 +86,22 @@ static void wifi_state_cb(wifi_state_t state, void *user_data)
 
     case WIFI_STATE_STA_DISCONNECTED:
         /* Don't change LED — let reconnect handle it */
+        break;
+
+    case WIFI_STATE_STA_FAILED:
+        ESP_LOGW(TAG, "STA mode failed permanently, falling back to AP");
+        led_set_status(LED_PERMANENT_FAILURE);
+
+        /* Web server may already be running; if not, start it for AP config */
+        if (!s_web_server_started) {
+            esp_err_t ret = web_server_start(80);
+            if (ret == ESP_OK) {
+                s_web_server_started = true;
+                ESP_LOGI(TAG, "Web server started (fallback AP mode)");
+            } else {
+                ESP_LOGE(TAG, "Web server start failed in fallback: %s", esp_err_to_name(ret));
+            }
+        }
         break;
     }
 }
@@ -217,6 +234,7 @@ void app_main(void)
             ESP_LOGW(TAG, "MJPEG streamer init failed: %s", esp_err_to_name(ret));
         } else {
             ESP_LOGI(TAG, "[10/14] MJPEG streamer initialized");
+            s_mjpeg_initialized = true;
         }
     } else {
         /* --- AP mode --- */
@@ -235,6 +253,17 @@ void app_main(void)
         ESP_LOGI(TAG, "  Config page: http://192.168.4.1");
         ESP_LOGI(TAG, "========================================");
 
+        /* Step 10b: MJPEG streamer init (needed before web_server registers /stream) */
+        if (!s_mjpeg_initialized) {
+            ret = mjpeg_streamer_init();
+            if (ret == ESP_OK) {
+                s_mjpeg_initialized = true;
+                ESP_LOGI(TAG, "[10b/14] MJPEG streamer initialized (AP mode)");
+            } else {
+                ESP_LOGW(TAG, "MJPEG streamer init failed in AP mode: %s", esp_err_to_name(ret));
+            }
+        }
+
         /* Step 11: Web server (config page only in AP mode) */
         ret = web_server_start(80);
         if (ret == ESP_OK) {
@@ -244,8 +273,8 @@ void app_main(void)
             ESP_LOGE(TAG, "Web server start failed: %s", esp_err_to_name(ret));
         }
 
-        /* In AP mode: no camera streaming, no motion, no time sync, no health.
-         * Just the config web server for first-time setup. */
+        /* In AP mode: camera available for capture/preview but no motion, no time sync, no health.
+         * Config web server + /stream and /capture endpoints for preview. */
     }
 
     /* Step 14: BOOT button factory reset monitor */

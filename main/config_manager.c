@@ -163,7 +163,7 @@ esp_err_t config_init(void)
         if (save_ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to save migrated config: %s", esp_err_to_name(save_ret));
         }
-        return ESP_OK;
+        return save_ret;
     }
 
     // v1 迁移也失败，使用默认值

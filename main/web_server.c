@@ -25,7 +25,9 @@
 #include "wifi_manager.h"
 #include "camera_driver.h"
 #include "mjpeg_streamer.h"
+#include "motion_detect.h"
 
+#include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -145,6 +147,7 @@ static esp_err_t handler_api_status(httpd_req_t *req)
         case WIFI_STATE_STA_CONNECTING:  state_str = "connecting"; break;
         case WIFI_STATE_STA_CONNECTED:   state_str = "connected"; break;
         case WIFI_STATE_STA_DISCONNECTED: state_str = "disconnected"; break;
+        case WIFI_STATE_STA_FAILED:      state_str = "failed"; break;
     }
     cJSON_AddStringToObject(root, "wifi_state", state_str);
     cJSON_AddStringToObject(root, "ip", wifi_get_ip_str());
@@ -197,7 +200,6 @@ static esp_err_t handler_api_config_get(httpd_req_t *req)
 
 static esp_err_t handler_api_config_post(httpd_req_t *req)
 {
-
     char *body = NULL;
     int body_len = 0;
     if (read_body(req, &body, &body_len) != ESP_OK) {
@@ -209,6 +211,18 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
     if (!root) {
         return json_error(req, "Invalid JSON", 400);
     }
+
+    /* Snapshot old config for change detection */
+    const cam_config_t *old_cfg = config_get();
+    uint8_t old_resolution = old_cfg->resolution;
+    uint8_t old_fps = old_cfg->fps;
+    uint8_t old_jpeg_quality = old_cfg->jpeg_quality;
+    char old_wifi_ssid[33];
+    char old_wifi_pass[65];
+    strncpy(old_wifi_ssid, old_cfg->wifi_ssid, sizeof(old_wifi_ssid) - 1);
+    old_wifi_ssid[sizeof(old_wifi_ssid) - 1] = '\0';
+    strncpy(old_wifi_pass, old_cfg->wifi_pass, sizeof(old_wifi_pass) - 1);
+    old_wifi_pass[sizeof(old_wifi_pass) - 1] = '\0';
 
     /* Copy current config, apply partial updates */
     cam_config_t new_cfg;
@@ -251,9 +265,54 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
         return json_error(req, "Failed to save config", 400);
     }
 
+    /* --- Live-apply: camera settings --- */
+    char message[128] = "";
+    bool camera_applied = false;
+
+    if (new_cfg.resolution != old_resolution ||
+        new_cfg.fps != old_fps ||
+        new_cfg.jpeg_quality != old_jpeg_quality) {
+        bool motion_was_running = motion_detect_is_running();
+        ESP_LOGI(TAG, "Camera settings changed, reinitializing...");
+        mjpeg_streamer_stop();
+        if (motion_was_running) {
+            motion_detect_stop();
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+        camera_deinit();
+        err = camera_init((camera_resolution_t)new_cfg.resolution,
+                          new_cfg.fps, new_cfg.jpeg_quality);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Camera reinitialized with new settings");
+            camera_applied = true;
+            if (motion_was_running) {
+                motion_detect_start();
+            }
+        } else {
+            ESP_LOGE(TAG, "Camera reinit failed: %s", esp_err_to_name(err));
+            snprintf(message, sizeof(message), "Camera reinit failed");
+        }
+    }
+
+    /* --- WiFi change detection --- */
+    if (strcmp(new_cfg.wifi_ssid, old_wifi_ssid) != 0 ||
+        strcmp(new_cfg.wifi_pass, old_wifi_pass) != 0) {
+        if (message[0]) {
+            size_t len = strlen(message);
+            snprintf(message + len, sizeof(message) - len,
+                     "; WiFi settings changed, reboot required");
+        } else {
+            snprintf(message, sizeof(message),
+                     "WiFi settings changed, reboot required");
+        }
+    }
+
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "success", true);
-    cJSON_AddStringToObject(resp, "message", "Config updated");
+    cJSON_AddStringToObject(resp, "message", message[0] ? message : "Config updated");
+    if (camera_applied) {
+        cJSON_AddStringToObject(resp, "applied", "camera");
+    }
     return json_ok(req, resp);
 }
 

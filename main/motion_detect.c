@@ -43,6 +43,14 @@ static TaskHandle_t s_motion_task_handle = NULL;
 static volatile bool s_running = false;
 static bool s_in_cooldown = false;
 static int64_t s_cooldown_start_us = 0;
+static int s_consecutive_detections = 0;
+
+/* Static buffer reuse for heap fragmentation mitigation */
+static uint8_t *s_samples_a = NULL;
+static size_t s_samples_a_size = 0;
+static uint8_t *s_jpeg_copy = NULL;
+static size_t s_jpeg_copy_size = 0;
+#define REQUIRED_CONSECUTIVE 2
 
 /* ---- Internal helpers ---- */
 
@@ -160,7 +168,13 @@ static void motion_detection_task(void *arg)
         size_t sample_count = (a_len + SAMPLE_STEP - 1) / SAMPLE_STEP;
         uint8_t *samples_a = NULL;
         if (sample_count > 0) {
-            samples_a = (uint8_t *)malloc(sample_count);
+            /* Reuse static sample buffer to reduce heap fragmentation */
+            if (s_samples_a == NULL || s_samples_a_size < sample_count) {
+                free(s_samples_a);
+                s_samples_a = (uint8_t *)malloc(sample_count);
+                s_samples_a_size = s_samples_a ? sample_count : 0;
+            }
+            samples_a = s_samples_a;
         }
         if (samples_a == NULL) {
             ESP_LOGW(TAG, "Failed to allocate sample buffer (%u bytes)", (unsigned)sample_count);
@@ -183,7 +197,6 @@ static void motion_detection_task(void *arg)
         camera_fb_t *fb_b = NULL;
         if (camera_capture(&fb_b) != ESP_OK || fb_b == NULL) {
             ESP_LOGW(TAG, "Failed to capture comparison frame");
-            free(samples_a);
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
@@ -208,23 +221,43 @@ static void motion_detection_task(void *arg)
 
         /* Free fb_b and sample buffer */
         camera_return_fb(fb_b);
-        free(samples_a);
 
-        if (motion && !s_in_cooldown) {
-            ESP_LOGI(TAG, "Motion detected!");
+        if (motion) {
+            s_consecutive_detections++;
+            if (s_consecutive_detections >= REQUIRED_CONSECUTIVE && !s_in_cooldown) {
+                ESP_LOGI(TAG, "Motion detected! (consecutive=%d)", s_consecutive_detections);
 
-            /* Capture a fresh frame for upload */
-            camera_fb_t *fb_upload = NULL;
-            if (camera_capture(&fb_upload) == ESP_OK && fb_upload != NULL) {
-                upload_with_retry(fb_upload->buf, fb_upload->len);
-                camera_return_fb(fb_upload);
+                /* Capture a fresh frame for upload */
+                camera_fb_t *fb_upload = NULL;
+                if (camera_capture(&fb_upload) == ESP_OK && fb_upload != NULL) {
+                    /* Copy JPEG data so we can return the framebuffer immediately */
+                    /* Reuse static JPEG buffer to reduce heap fragmentation */
+                    if (s_jpeg_copy == NULL || s_jpeg_copy_size < fb_upload->len) {
+                        free(s_jpeg_copy);
+                        s_jpeg_copy = (uint8_t *)malloc(fb_upload->len);
+                        s_jpeg_copy_size = s_jpeg_copy ? fb_upload->len : 0;
+                    }
+                    if (s_jpeg_copy != NULL) {
+                        memcpy(s_jpeg_copy, fb_upload->buf, fb_upload->len);
+                        camera_return_fb(fb_upload);  // Unblock camera immediately
+                        upload_with_retry(s_jpeg_copy, fb_upload->len);
+                    } else {
+                        ESP_LOGW(TAG, "Failed to allocate JPEG copy buffer (%u bytes)", fb_upload->len);
+                        camera_return_fb(fb_upload);
+                    }
+                } else {
+                    ESP_LOGW(TAG, "Failed to capture frame for upload");
+                }
+
+                /* Enter cooldown */
+                s_in_cooldown = true;
+                s_cooldown_start_us = esp_timer_get_time();
+                s_consecutive_detections = 0;
             } else {
-                ESP_LOGW(TAG, "Failed to capture frame for upload");
+                ESP_LOGD(TAG, "Motion candidate (%d/%d consecutive)", s_consecutive_detections, REQUIRED_CONSECUTIVE);
             }
-
-            /* Enter cooldown */
-            s_in_cooldown = true;
-            s_cooldown_start_us = esp_timer_get_time();
+        } else {
+            s_consecutive_detections = 0;
         }
 
         /* Check cooldown expiration */
@@ -258,6 +291,13 @@ esp_err_t motion_detect_start(void)
     s_running = true;
     s_in_cooldown = false;
     s_cooldown_start_us = 0;
+    s_consecutive_detections = 0;
+
+    /* Reset static buffers */
+    s_samples_a = NULL;
+    s_samples_a_size = 0;
+    s_jpeg_copy = NULL;
+    s_jpeg_copy_size = 0;
 
     BaseType_t ret = xTaskCreate(
         motion_detection_task,
@@ -300,6 +340,14 @@ void motion_detect_stop(void)
         vTaskDelete(s_motion_task_handle);
         s_motion_task_handle = NULL;
     }
+
+    /* Free static buffers */
+    free(s_samples_a);
+    s_samples_a = NULL;
+    s_samples_a_size = 0;
+    free(s_jpeg_copy);
+    s_jpeg_copy = NULL;
+    s_jpeg_copy_size = 0;
 
     s_in_cooldown = false;
     ESP_LOGI(TAG, "Motion detection stopped");

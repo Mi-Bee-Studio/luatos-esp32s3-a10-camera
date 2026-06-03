@@ -11,6 +11,8 @@
 #include "esp_camera.h"
 #include "img_converters.h"
 #include "driver/i2c_master.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "camera_driver";
 
@@ -41,6 +43,7 @@ static const char *TAG = "camera_driver";
 /* ── Module state ── */
 static bool s_camera_initialized = false;
 static camera_resolution_t s_current_resolution = CAMERA_RES_VGA;
+static SemaphoreHandle_t s_camera_mutex = NULL;
 
 /* ── Helpers ── */
 
@@ -177,6 +180,7 @@ esp_err_t camera_init(camera_resolution_t resolution, uint8_t fps, uint8_t jpeg_
     }
 
     s_camera_initialized = true;
+    s_camera_mutex = xSemaphoreCreateMutex();
     s_current_resolution = resolution;
 
     ESP_LOGI(TAG, "Camera initialized successfully");
@@ -197,6 +201,10 @@ esp_err_t camera_deinit(void)
     }
 
     s_camera_initialized = false;
+    if (s_camera_mutex) {
+        vSemaphoreDelete(s_camera_mutex);
+        s_camera_mutex = NULL;
+    }
     ESP_LOGI(TAG, "Camera deinitialized");
     return ESP_OK;
 }
@@ -213,8 +221,15 @@ esp_err_t camera_capture(camera_fb_t **fb)
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* Acquire camera mutex before accessing framebuffer */
+    if (s_camera_mutex == NULL || xSemaphoreTake(s_camera_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to acquire camera mutex");
+        return ESP_FAIL;
+    }
+
     *fb = esp_camera_fb_get();
     if (*fb == NULL) {
+        xSemaphoreGive(s_camera_mutex);
         ESP_LOGE(TAG, "Failed to capture frame");
         return ESP_FAIL;
     }
@@ -230,6 +245,9 @@ esp_err_t camera_return_fb(camera_fb_t *fb)
     }
 
     esp_camera_fb_return(fb);
+    if (s_camera_mutex) {
+        xSemaphoreGive(s_camera_mutex);
+    }
     return ESP_OK;
 }
 

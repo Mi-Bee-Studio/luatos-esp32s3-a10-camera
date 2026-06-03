@@ -8,8 +8,7 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "esp_timer.h"
 #include <string.h>
 
 static const char *TAG = "wifi_manager";
@@ -26,6 +25,9 @@ static esp_netif_t *s_ap_netif = NULL;
 static esp_event_handler_instance_t s_wifi_handler = NULL;
 static esp_event_handler_instance_t s_ip_handler = NULL;
 
+// WiFi retry timer (non-blocking)
+static esp_timer_handle_t s_retry_timer = NULL;
+
 // STA reconnect state
 static int s_retry_count = 0;
 #define MAX_RETRY 5
@@ -35,6 +37,8 @@ static int s_retry_count = 0;
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data);
 static void notify_state(wifi_state_t new_state);
+static void wifi_retry_timer_callback(void *arg);
+static void wifi_fallback_to_ap(void);
 
 // --- Helper ---
 static void set_state(wifi_state_t new_state)
@@ -46,11 +50,27 @@ static void set_state(wifi_state_t new_state)
     }
 }
 
+// --- Retry timer callback ---
+static void IRAM_ATTR wifi_retry_timer_callback(void *arg)
+{
+    ESP_LOGI(TAG, "Non-blocking retry: attempt %d/%d", s_retry_count, MAX_RETRY);
+    esp_wifi_connect();
+}
+
 static void notify_state(wifi_state_t new_state)
 {
     if (s_callback) {
         s_callback(new_state, s_user_data);
     }
+}
+
+// --- Fallback to AP after STA failure ---
+static void wifi_fallback_to_ap(void)
+{
+    wifi_stop_retry();
+    ESP_LOGE(TAG, "WiFi connection failed after %d retries. Starting AP mode for configuration", MAX_RETRY);
+    set_state(WIFI_STATE_STA_FAILED);
+    wifi_start_ap();
 }
 
 // --- Event handler ---
@@ -73,14 +93,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         case WIFI_EVENT_STA_DISCONNECTED: {
             s_retry_count++;
             if (s_retry_count < MAX_RETRY) {
-                ESP_LOGW(TAG, "STA disconnected, retry %d/%d in %ds",
-                         s_retry_count, MAX_RETRY, RETRY_DELAY_S);
+                ESP_LOGW(TAG, "STA disconnected, non-blocking retry scheduled (attempt %d/%d)",
+                         s_retry_count, MAX_RETRY);
                 set_state(WIFI_STATE_STA_DISCONNECTED);
-                vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_S * 1000));
-                esp_wifi_connect();
+                esp_timer_start_once(s_retry_timer, RETRY_DELAY_S * 1000000);
             } else {
-                ESP_LOGE(TAG, "STA disconnected, max retries (%d) reached, giving up", MAX_RETRY);
-                set_state(WIFI_STATE_STA_DISCONNECTED);
+                wifi_fallback_to_ap();
             }
             break;
         }
@@ -159,6 +177,16 @@ esp_err_t wifi_init(void)
         return ret;
     }
 
+    // Create one-shot retry timer
+    esp_timer_create_args_t timer_args = {
+        .callback = wifi_retry_timer_callback,
+        .name = "wifi_retry"
+    };
+    ret = esp_timer_create(&timer_args, &s_retry_timer);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create WiFi retry timer: %s", esp_err_to_name(ret));
+        return ret;
+    }
     s_state = WIFI_STATE_AP;
     s_retry_count = 0;
     memset(s_ip_str, 0, sizeof(s_ip_str));
@@ -295,6 +323,14 @@ esp_err_t wifi_stop(void)
     return ESP_OK;
 }
 
+esp_err_t wifi_stop_retry(void)
+{
+    if (s_retry_timer) {
+        esp_timer_stop(s_retry_timer);
+    }
+    return ESP_OK;
+}
+
 esp_err_t wifi_manager_deinit(void)
 {
     esp_err_t ret;
@@ -309,6 +345,12 @@ esp_err_t wifi_manager_deinit(void)
         s_ip_handler = NULL;
     }
 
+    // Stop and delete retry timer
+    if (s_retry_timer) {
+        esp_timer_stop(s_retry_timer);
+        esp_timer_delete(s_retry_timer);
+        s_retry_timer = NULL;
+    }
     ret = esp_wifi_stop();
     if (ret != ESP_OK && ret != ESP_ERR_WIFI_NOT_STARTED) {
         ESP_LOGW(TAG, "esp_wifi_stop during deinit: %s", esp_err_to_name(ret));

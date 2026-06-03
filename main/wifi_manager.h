@@ -14,6 +14,7 @@ typedef enum {
     WIFI_STATE_STA_CONNECTING,   // STA connecting to router
     WIFI_STATE_STA_CONNECTED,    // STA connected
     WIFI_STATE_STA_DISCONNECTED, // STA disconnected (will retry)
+    WIFI_STATE_STA_FAILED,       // STA failed permanently, falling back to AP
 } wifi_state_t;
 
 // Callback type for state changes
@@ -70,5 +71,11 @@ esp_err_t wifi_stop(void);
  * @return ESP_OK 成功，其他值失败
  */
 esp_err_t wifi_manager_deinit(void);
+
+/**
+ * @brief 停止 WiFi 重连定时器（取消待执行的重连）
+ * @return ESP_OK 成功
+ */
+esp_err_t wifi_stop_retry(void);
 
 #endif // WIFI_MANAGER_H

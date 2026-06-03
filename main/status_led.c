@@ -61,7 +61,20 @@ static void led_timer_callback(void *arg) {
                 gpio_set_level(LED_GPIO, 0); // Gap
             }
             break;
-            
+
+        case LED_PERMANENT_FAILURE:
+            // Fast triple-blink: 200ms on, 200ms off x 3, then 600ms off (total 2400ms)
+            // 48 phases per 2400ms at 50ms per phase
+            {
+                int p = phase_counter % 48;
+                if (p < 4 || (p >= 8 && p < 12) || (p >= 16 && p < 20)) {
+                    gpio_set_level(LED_GPIO, 1); // On
+                } else {
+                    gpio_set_level(LED_GPIO, 0); // Off
+                }
+            }
+            break;
+
         default:
             break;
     }

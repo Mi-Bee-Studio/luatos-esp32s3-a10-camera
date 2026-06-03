@@ -76,6 +76,7 @@ esp_err_t mjpeg_streamer_http_handler(httpd_req_t *req)
     camera_fb_t *fb = NULL;
     char part_hdr[128];
 
+    int consecutive_failures = 0;
     while (1) {
         /* Capture frame with retry (buffer may be temporarily unavailable) */
         esp_err_t ret;
@@ -87,10 +88,16 @@ esp_err_t mjpeg_streamer_http_handler(httpd_req_t *req)
             vTaskDelay(pdMS_TO_TICKS(50));
         }
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Camera capture failed after %d retries, ending stream", retries);
-            break;
+            consecutive_failures++;
+            if (consecutive_failures >= 10) {
+                ESP_LOGE(TAG, "Camera capture failed %d consecutive times, ending stream", consecutive_failures);
+                break;
+            }
+            ESP_LOGW(TAG, "Camera capture failed (%d/10 consecutive), retrying...", consecutive_failures);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
         }
-
+        consecutive_failures = 0;
         /* Build multipart header for this frame */
         int hdrlen = snprintf(part_hdr, sizeof(part_hdr), STREAM_BOUNDARY, (unsigned int)fb->len);
 
