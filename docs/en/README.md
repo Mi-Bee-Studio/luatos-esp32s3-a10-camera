@@ -30,7 +30,7 @@ MiBeeCam is a compact, intelligent camera system built with ESP32-S3 and OV2640 
 
 ### Software Requirements
 
-- ESP-IDF v5.4.3
+- ESP-IDF v5.5.4
 - ESP32-S3 target support
 - ESP32 camera driver component
 

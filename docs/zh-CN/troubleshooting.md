@@ -46,16 +46,15 @@ E (32) boot: PSRAM disabled due to critical failure
 
 **解决方案**:
 ```bash
-# 回退到 ESP-IDF v5.4.3
-git checkout v5.4.3
-. $HOME/esp/esp-idf/export.sh
+# 使用 ESP-IDF v5.5.4
+source /home/mickey/.espressif/v5.5.4/esp-idf/export.sh
 ```
 
 **验证方法**:
 ```bash
 # 检查 ESP-IDF 版本
 idf.py --version
-# 应该显示: v5.4.3
+# 应该显示: v5.5.4
 ```
 
 **预防措施**:
@@ -250,6 +249,68 @@ curl -X POST http://192.168.4.1/api/config \
 - 使用 `network_config_t` 验证 WiFi 配置
 - 检查 WiFi 频段支持限制
 - 在用户界面中明确提示支持频段
+
+---
+
+### 问题 9：WiFi STA 连接失败（WPA2-PSK + SAE 信标 + 栈溢出）
+
+**现象**：无法连接 WPA2-PSK WiFi 网络。认证阶段在 `init -> auth` 超时，或关联成功后立即崩溃：`stack overflow in task wifi`。
+
+**根因**：两个独立的问题：
+
+1. **SAE 认证模式选择**：部分 WPA2-PSK 路由器在信标帧中广播 SAE（WPA3）能力位（`akm=5`）。ESP32 WiFi 驱动看到后优先选择 SAE 认证，但路由器只认 WPA2-PSK，导致认证在 `init -> auth` 卡死。
+2. **WiFi 任务栈溢出**：WiFi 驱动的内部任务（`"wifi"`）栈只有 3584 字节。在 DEBUG 日志级别下，`assoc -> run` 状态切换时驱动的内部 `D` 级日志调用消耗了过多栈空间，触发 FreeRTOS 栈溢出 panic。
+
+**现象对照**：
+
+| 场景 | 日志输出 |
+|------|----------|
+| 认证超时 | `connect_op: auth=5, cipher=3` → 卡在 `init -> auth` |
+| 栈溢出 | `state: assoc -> run` → `A stack overflow in task wifi has been detected.` |
+
+**修复 1：禁用 AMPDU TX/RX**
+
+禁用 AMPDU 后 WiFi 驱动改用另一条内部代码路径，跳过 SAE 协商直接使用 Open System 认证。在 `sdkconfig.defaults` 中设置：
+```
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+```
+
+**修复 2：日志级别必须为 INFO 或更低**
+
+WiFi 任务只有 3584 字节栈空间，DEBUG 级别下内部日志调用撑爆栈：
+```
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL=3
+```
+
+**修复 3（辅助）：提升发射功率**
+提升 TX 功率到 15 dBm，增强连接稳定性：
+```c
+ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(15));
+```
+
+**修复 4（辅助）：直接调用 `esp_wifi_connect()`**
+在 `esp_wifi_start()` 后立即调用 `esp_wifi_connect()`，而不是仅依赖 `WIFI_EVENT_STA_START` 事件处理链，减少竞态条件。
+
+**修复 5（辅助）：延迟执行状态回调**
+WiFi 状态回调中会调用 `time_sync_init()`、`web_server_start()`、`motion_detect_start()` 等重量级初始化。通过事件循环延迟执行，避免占用 WiFi 任务栈空间：
+```c
+// 不要直接调用 s_callback()，而是投递到事件循环
+esp_event_post(WIFI_MANAGER_EVENTS, (int32_t)new_state, NULL, 0, portMAX_DELAY);
+```
+
+**成功的连接流程**：
+1. `init -> auth` — 驱动跳过 SAE（AMPDU 关闭的代码路径），使用 Open System 认证
+2. `auth -> assoc` — 发送关联请求
+3. `assoc -> run` — 连接建立（日志级别 INFO，不会栈溢出）
+4. `got IP` — DHCP 完成，回调在事件循环任务中执行（4096 字节栈）
+
+**验证方法**：
+```bash
+curl http://<设备IP>/api/status
+# 应显示: wifi_state: "connected"
+```
 
 ---
 
@@ -604,7 +665,7 @@ idf.py build memory-report
 
 ## 🚀 最佳实践
 
-1. **始终使用正确的 ESP-IDF 版本** (v5.4.3)
+1. **始终使用正确的 ESP-IDF 版本** (v5.5.4)
 2. **禁用 PSRAM 以避免时序问题**
 3. **使用正确的摄像头模型定义** (CAMERA_MODEL_Air_ESP32S3)
 4. **先注册具体 URI，再注册通配符 URI**

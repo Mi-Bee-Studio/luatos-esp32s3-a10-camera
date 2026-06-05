@@ -187,7 +187,7 @@ The MiBeeCam system is built around the ESP32-S3 microcontroller with OV2640 cam
 - **Partition Table**: Must match exact offsets for SPIFFS
 
 ### Hardware Compatibility
-- ESP-IDF v5.4.3 required (v6.0 has PSRAM bugs)
+- ESP-IDF v5.5.4 required (v6.0 has PSRAM bugs)
 - OV2640 modules with 8225N/GC2053 interface
 - Standard ESP32-S3 development boards
 

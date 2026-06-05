@@ -49,7 +49,7 @@ idf.py menuconfig -> Camera -> Test configuration
 
 2. Use correct ESP-IDF version:
    ```bash
-   # Use ESP-IDF v5.4.3 (v6.0 has PSRAM bugs)
+   # Use ESP-IDF v5.5.4 (v6.0 has PSRAM bugs)
    ./install.sh -f
    source export.sh
    ```
@@ -297,6 +297,69 @@ idf.py monitor
 # Should show only 2.4GHz networks available
 ```
 
+### 2. WiFi STA Connection Failure (WPA2-PSK + SAE Beacon + Stack Overflow)
+
+**Problem**: Device cannot connect to WPA2-PSK WiFi networks. Authentication times out at `init -> auth`, or after associating it crashes with `stack overflow in task wifi`.
+
+**Root Cause**: Two independent issues:
+
+1. **SAE auth mode selection**: Some WPA2-PSK routers broadcast SAE (WPA3) capability in their beacon frames (`akm=5`). The ESP32 WiFi driver sees this and attempts SAE authentication even though the router expects WPA2-PSK. This stalls the connection at `init -> auth`.
+2. **WiFi task stack overflow**: The WiFi driver's internal task (`"wifi"`) has only 3584 bytes of stack. At DEBUG log level (`CONFIG_LOG_DEFAULT_LEVEL=4`), the driver's internal `D`-level log calls during `assoc -> run` transition consume too much stack, causing a FreeRTOS stack overflow panic.
+
+**Symptoms**:
+
+| Scenario | Log Output |
+|----------|------------|
+| Auth timeout | `connect_op: auth=5, cipher=3` → stalled at `init -> auth` |
+| Stack overflow | `state: assoc -> run` → `A stack overflow in task wifi has been detected.` |
+
+**Fix 1: Disable AMPDU TX/RX**
+
+Disabling AMPDU changes the WiFi driver's internal code path so it skips SAE negotiation and uses Open System authentication instead. In `sdkconfig.defaults`:
+```
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+```
+
+**Fix 2: Use INFO log level or lower**
+
+The WiFi task only has 3584 bytes of stack. At DEBUG level, internal log calls overflow it:
+```
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL=3
+```
+
+**Fix 3 (auxiliary): TX power boost**
+Boost TX power to improve connection stability:
+```c
+ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(15));
+```
+
+**Fix 4 (auxiliary): Call `esp_wifi_connect()` directly**
+Call `esp_wifi_connect()` immediately after `esp_wifi_start()` instead of relying solely on the `WIFI_EVENT_STA_START` handler, reducing race conditions.
+
+**Fix 5 (auxiliary): Defer state callbacks**
+The WiFi state callback (`wifi_state_cb`) runs `time_sync_init()`, `web_server_start()`, `motion_detect_start()` from the event handler context. Post the callback to the default event loop to avoid contributing to WiFi task stack pressure:
+```c
+// Instead of calling s_callback() directly, post to event loop
+esp_event_post(WIFI_MANAGER_EVENTS, (int32_t)new_state, NULL, 0, portMAX_DELAY);
+```
+
+**Working connection flow**:
+1. `init -> auth` — driver skips SAE (AMPDU-disabled code path), uses Open System auth
+2. `auth -> assoc` — association request sent
+3. `assoc -> run` — connection established (no stack overflow because log level is INFO)
+4. `got IP` — DHCP completes, callback runs in event loop task (4096B stack)
+
+**Verification**:
+```bash
+curl http://<device-ip>/api/status
+# Should show: wifi_state: "connected"
+```
+
+---
+
+
 ### 2. Memory Frame Buffer Resolution Limits
 **Problem**: Higher camera resolutions cause memory errors  
 **Root Cause**: DRAM frame buffer size limits resolution  
@@ -412,13 +475,13 @@ curl http://192.168.1.100/
 ### 1. ESP-IDF Version Compatibility
 **Problem**: Build errors with ESP-IDF v6.0  
 **Root Cause**: ESP-IDF v6.0 has PSRAM bugs and compatibility issues  
-**Solution**: Use ESP-IDF v5.4.3
+**Solution**: Use ESP-IDF v5.5.4
 
 **Fix**:
 ```bash
-# Switch to ESP-IDF v5.4.3
+# Switch to ESP-IDF v5.5.4
 cd $HOME/esp/esp-idf
-git checkout v5.4.3
+git checkout v5.5.4
 
 # Update submodules
 git submodule update --init --recursive

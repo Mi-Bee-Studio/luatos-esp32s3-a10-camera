@@ -24,7 +24,7 @@ The MiBeeCam software is designed as a real-time embedded system with multiple c
 ├─────────────────────────────────────────────────────────────┤
 │                    Platform Layer                           │
 ├─────────────────────────────────────────────────────────────┤
-│                 FreeRTOS + ESP-IDF v5.4.3                   │
+│                 FreeRTOS + ESP-IDF v5.5.4                   │
 └─────────────────────────────────────────────────────────────┘
 ```
 

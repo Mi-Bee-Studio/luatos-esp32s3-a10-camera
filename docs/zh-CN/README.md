@@ -13,7 +13,7 @@
 
 ## 🏗️ 项目概述
 
-MiBeeCam 是基于 ESP32-S3-A10 开发的高性能智能摄像头项目，采用 ESP-IDF v5.4.3 框架开发。本项目支持实时视频流、运动检测、图像上传和 Web 配置界面，适用于智能家居监控、物联网应用等场景。
+MiBeeCam 是基于 ESP32-S3-A10 开发的高性能智能摄像头项目，采用 ESP-IDF v5.5.4 框架开发。本项目支持实时视频流、运动检测、图像上传和 Web 配置界面，适用于智能家居监控、物联网应用等场景。
 <p align="center">
     <img src="../images/index-dashboard.png" alt="MiBeeCam 仪表盘" width="640">
 </p>
@@ -31,7 +31,7 @@ MiBeeCam 是基于 ESP32-S3-A10 开发的高性能智能摄像头项目，采用
 
 ### 🎯 技术栈
 
-- **开发框架**: ESP-IDF v5.4.3
+- **开发框架**: ESP-IDF v5.5.4
 - **编程语言**: C/C++
 - **网络协议**: HTTP/HTTPS, TCP/IP
 - **图像格式**: JPEG
@@ -43,7 +43,7 @@ MiBeeCam 是基于 ESP32-S3-A10 开发的高性能智能摄像头项目，采用
 
 ### 环境要求
 
-- ESP-IDF v5.4.3
+- ESP-IDF v5.5.4
 - ESP32-S3 开发板
 - OV2640 摄像头模块
 - 支持的编译器: xtensa-esp32s3-elf-gcc v12.2.0+
