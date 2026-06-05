@@ -3,7 +3,7 @@
 <p align="center">
   <img src="https://img.shields.io/github/actions/workflow/status/Mi-Bee-Studio/luatos-esp32s3-a10-camera/build.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white" alt="Build Status">
   <img src="https://img.shields.io/github/license/Mi-Bee-Studio/luatos-esp32s3-a10-camera?style=for-the-badge&color=blue" alt="License">
-  <img src="https://img.shields.io/badge/ESP--IDF-v5.4.3-00A3E0?style=for-the-badge" alt="ESP-IDF">
+  <img src="https://img.shields.io/badge/ESP--IDF-v5.5.4-00A3E0?style=for-the-badge" alt="ESP-IDF">
   <img src="https://img.shields.io/badge/platform-ESP32--S3-EA6726?style=for-the-badge" alt="Platform">
   <img src="https://img.shields.io/badge/language-C-00599C?style=for-the-badge&logo=c&logoColor=white" alt="Language">
   <img src="https://img.shields.io/github/v/release/Mi-Bee-Studio/luatos-esp32s3-a10-camera?style=for-the-badge&color=brightgreen" alt="Release">
@@ -25,7 +25,7 @@
   <img src="docs/images/luatos-esp32s3-a10.png" alt="MiBeeCam ESP32-S3-A10" width="480">
 </p>
 
-MiBeeCam is an open-source smart camera firmware for the **LuatOS ESP32-S3-A10** development board with an **OV2640 (8225N)** image sensor. Built entirely on **ESP-IDF v5.4.3**, it packs a complete surveillance system into a single firmware image:
+MiBeeCam is an open-source smart camera firmware for the **LuatOS ESP32-S3-A10** development board with an **OV2640 (8225N)** image sensor. Built entirely on **ESP-IDF v5.5.4**, it packs a complete surveillance system into a single firmware image:
 
 - 🖥️ **Built-in web UI** for live viewing and configuration
 - 📡 **MJPEG video streaming** at up to 15 FPS
@@ -65,7 +65,7 @@ No cloud dependencies. No subscription. Just a WiFi camera that works on your LA
 
 ### Prerequisites
 
-- **ESP-IDF v5.4.3** (do not use v6.0 — known PSRAM issues with this board)
+- **ESP-IDF v5.5.4** (do not use v6.0 — known PSRAM issues with this board)
 - **Python 3.8+**
 - **esptool.py**
 - Dependency: `espressif/esp32-camera ^2.0.0` (resolved via `idf_component.yml`)

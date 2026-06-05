@@ -292,9 +292,8 @@ esp_err_t wifi_start_sta(const char *ssid, const char *pass)
         },
     };
 
-    strncpy((char *)wifi_config.sta.ssid, "REDACTED", sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, "REDACTED", sizeof(wifi_config.sta.password) - 1);
-    (void)ssid;(void)pass;
+    strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
+    strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
 
     ret = esp_wifi_stop();
     if (ret != ESP_OK && ret != ESP_ERR_WIFI_NOT_STARTED) {

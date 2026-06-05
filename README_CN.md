@@ -3,7 +3,7 @@
 <p align="center">
   <img src="https://img.shields.io/github/actions/workflow/status/Mi-Bee-Studio/luatos-esp32s3-a10-camera/build.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white" alt="构建状态">
   <img src="https://img.shields.io/github/license/Mi-Bee-Studio/luatos-esp32s3-a10-camera?style=for-the-badge&color=blue" alt="许可证">
-  <img src="https://img.shields.io/badge/ESP--IDF-v5.4.3-00A3E0?style=for-the-badge" alt="ESP-IDF">
+  <img src="https://img.shields.io/badge/ESP--IDF-v5.5.4-00A3E0?style=for-the-badge" alt="ESP-IDF">
   <img src="https://img.shields.io/badge/platform-ESP32--S3-EA6726?style=for-the-badge" alt="平台">
   <img src="https://img.shields.io/badge/language-C-00599C?style=for-the-badge&logo=c&logoColor=white" alt="语言">
   <img src="https://img.shields.io/github/v/release/Mi-Bee-Studio/luatos-esp32s3-a10-camera?style=for-the-badge&color=brightgreen" alt="发布版本">
@@ -25,7 +25,7 @@
   <img src="docs/images/luatos-esp32s3-a10.png" alt="MiBeeCam ESP32-S3-A10" width="480">
 </p>
 
-MiBeeCam 是专为 **LuatOS ESP32-S3-A10** 开发板和 **OV2640（8225N）** 图像传感器设计的开源智能摄像头固件。基于 **ESP-IDF v5.4.3** 构建，将完整的监控系统打包在单个固件镜像中：
+MiBeeCam 是专为 **LuatOS ESP32-S3-A10** 开发板和 **OV2640（8225N）** 图像传感器设计的开源智能摄像头固件。基于 **ESP-IDF v5.5.4** 构建，将完整的监控系统打包在单个固件镜像中：
 
 - 🖥️ **内置 Web UI**，支持实时预览和配置
 - 📡 **MJPEG 视频流**，最高 15 FPS
@@ -65,7 +65,7 @@ MiBeeCam 是专为 **LuatOS ESP32-S3-A10** 开发板和 **OV2640（8225N）** �
 
 ### 环境要求
 
-- **ESP-IDF v5.4.3**（不要使用 v6.0 — 此开发板存在已知 PSRAM 问题）
+- **ESP-IDF v5.5.4**（不要使用 v6.0 — 此开发板存在已知 PSRAM 问题）
 - **Python 3.8+**
 - **esptool.py**
 - 依赖：`espressif/esp32-camera ^2.0.0`（通过 `idf_component.yml` 自动解析）
