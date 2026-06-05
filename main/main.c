@@ -151,6 +151,7 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
     ESP_LOGI(TAG, "[2/14] Config initialized");
 
+
     /* Step 3: LED init */
     ret = led_init();
     ESP_ERROR_CHECK(ret);
