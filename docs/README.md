@@ -17,3 +17,4 @@
 | Software Architecture | [software.md](zh-CN/software.md) | [software.md](en/software.md) |
 | API Reference | [api.md](zh-CN/api.md) | [api.md](en/api.md) |
 | Troubleshooting | [troubleshooting.md](zh-CN/troubleshooting.md) | [troubleshooting.md](en/troubleshooting.md) |
+| AT Commands | [at_commands.md](zh-CN/at_commands.md) | [at_commands.md](en/at_commands.md) |
