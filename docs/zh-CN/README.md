@@ -28,6 +28,13 @@ MiBeeCam 是基于 ESP32-S3-A10 开发的高性能智能摄像头项目，采用
 - **图像上传**: 支持 HTTP POST 上传至云端服务器
 - **Web 界面**: 响应式 Web 配置和预览界面
 - **监控指标**: Prometheus 兼容的系统监控
+- **mDNS 发现**: 通过 http://mibee.local 访问设备
+- **WebSocket 实时推送**: 实时事件推送至 Web UI
+- **Webhook 客户端**: 外部 HTTP 事件转发
+- **ONVIF Profile S**: WS-Discovery 发现 + SOAP 服务
+- **备用 SSID**: 主 WiFi 失败时自动回退
+- **WiFi 扫描**: 通过 REST API 扫描附近网络
+- **AT 命令接口**: 通过 UART0 串口支持 20 个命令
 
 ### 🎯 技术栈
 
@@ -52,7 +59,7 @@ MiBeeCam 是基于 ESP32-S3-A10 开发的高性能智能摄像头项目，采用
 
 ```bash
 # 1. 设置 ESP-IDF 环境变量
-. $HOME/esp/esp-idf/export.sh
+source <esp-idf-path>/export.sh
 
 # 2. 设置目标芯片
 idf.py set-target esp32s3
@@ -72,22 +79,22 @@ idf.py -p COMx monitor
 
 ### 配置说明
 
-在 `menuconfig` 中可配置以下选项：
-- 摄像头类型 (OV2640)
-- WiFi SSID 和密码
-- 设备名称
-- 服务器地址
-- 运动检测阈值
-- JPEG 质量
-- 时区设置
+WiFi 凭据和服务器配置在运行时设置，无需修改代码：
+
+1. **Web UI**: 通过浏览器访问设备 IP，在配置页面设置
+2. **AT 命令**: 通过 UART0 串口（115200 波特率）发送命令：
+   - `AT+CWJAP=<ssid>,<pwd>` — 设置 WiFi 凭据
+   - `AT+CFGSET=server_url,http://your-server.com/upload` — 设置服务器地址
+   - `AT+CFGSET=motion_threshold,5` — 设置运动检测阈值
+   - `AT+CFGSET=motion_cooldown,10` — 设置运动检测冷却时间
 
 ## 🔧 基本使用
 
 ### Web 界面访问
 
-1. 连接 WiFi 网络（STA 模式）
-2. 访问摄像头 IP 地址（默认: 192.168.4.1）
-3. 浏览器打开即可查看实时视频流
+1. **AP 模式**（首次启动或无 WiFi 配置）：连接 WiFi 网络 **MiBeeCam**（密码: 12345678），访问 http://192.168.4.1
+2. **STA 模式**（已配置 WiFi）：设备连接路由器后通过 DHCP 获取 IP，可在路由器管理界面查看设备 IP
+3. 浏览器打开 IP 地址即可查看实时视频流
 
 ### 主要功能
 
@@ -95,6 +102,9 @@ idf.py -p COMx monitor
 2. **配置管理**: `/config.html` - Web 配置界面
 3. **状态监控**: `/api/status` - JSON 系统状态
 4. **图像捕获**: `/capture` - 单帧捕获并上传
+5. **WebSocket 实时推送**: `/ws` - 实时事件推送
+6. **mDNS 访问**: http://mibee.local
+7. **AT 命令控制**: 通过 UART0 串口发送 AT 命令
 
 ## 📚 文档导航
 
@@ -110,23 +120,33 @@ idf.py -p COMx monitor
 ### 代码结构
 
 ```
-luatos-esp32s3-a10-base/
+luatos-esp32s3-a10-camera/
 ├── main/
-│   ├── main.c              # 系统入口
+│   ├── main.c              # 系统入口，15 步启动流程
+│   ├── at_command.c/h      # UART0 AT 命令接口（20 个命令）
+│   ├── camera_driver.c/h   # OV2640 摄像头驱动
+│   ├── config_manager.c/h  # NVS 配置存储
+│   ├── event_bus.c/h       # 内存发布/订阅事件总线
+│   ├── frame_broadcaster.c/h # DRAM 帧缓存（引用计数）
+│   ├── health_monitor.c/h  # 健康监控 + Prometheus 指标
+│   ├── motion_detect.c/h   # 运动检测
+│   ├── mjpeg_streamer.c/h  # MJPEG 流媒体
+│   ├── onvif_discovery.c/h # ONVIF WS-Discovery
+│   ├── onvif_service.c/h   # ONVIF SOAP 服务
+│   ├── status_led.c/h      # 状态 LED 控制
+│   ├── time_sync.c/h       # NTP 时间同步
+│   ├── web_server.c/h      # HTTP 服务器 + REST API
+│   ├── webhook.c/h         # Webhook 事件转发
+│   ├── wifi_manager.c/h    # WiFi STA/AP 管理
+│   ├── cJSON.c/h           # JSON 解析器（第三方）
+│   ├── web_ui/             # SPIFFS 静态文件
 │   └── CMakeLists.txt      # 组件注册
-├── demo/main/main.lua      # LuatOS 备用方案
-├── components/
-│   ├── camera_driver/      # 摄像头驱动
-│   ├── config_manager/     # 配置管理
-│   ├── health_monitor/     # 健康监控
-│   ├── mjpeg_streamer/    # MJPEG 流媒体
-│   ├── motion_detect/      # 运动检测
-│   ├── status_led/        # LED 状态指示
-│   ├── time_sync/         # 时间同步
-│   ├── web_server/        # Web 服务器
-│   └── wifi_manager/      # WiFi 管理
-├── docs/zh-CN/            # 中文文档
-└── CMakeLists.txt          # 项目配置
+├── docs/                   # 双语文档（en/ + zh-CN/）
+├── .github/workflows/      # CI/CD
+├── CMakeLists.txt
+├── sdkconfig.defaults
+├── partitions.csv
+└── idf_component.yml       # ESP-IDF 组件依赖
 ```
 
 ### 调试技巧

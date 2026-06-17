@@ -7,25 +7,36 @@ MiBeeCam 采用模块化设计，基于 ESP-IDF v5.5.4 和 FreeRTOS 实时操作
 ## 📁 项目结构
 
 ```
-luatos-esp32s3-a10-base/
+luatos-esp32s3-a10-camera/
 ├── main/                    # 主程序目录
-│   ├── main.c              # 系统主入口 (687 行)
+│   ├── main.c              # 系统入口，15 步启动流程
+│   ├── at_command.c/h      # UART0 AT 命令接口（20 个命令）
+│   ├── camera_driver.c/h   # OV2640 摄像头驱动
+│   ├── config_manager.c/h  # NVS 配置存储
+│   ├── event_bus.c/h       # 内存发布/订阅事件总线
+│   ├── frame_broadcaster.c/h # DRAM 帧缓存（引用计数）
+│   ├── health_monitor.c/h  # 健康监控 + Prometheus 指标
+│   ├── motion_detect.c/h   # 运动检测
+│   ├── mjpeg_streamer.c/h  # MJPEG 流媒体
+│   ├── onvif_discovery.c/h # ONVIF WS-Discovery
+│   ├── onvif_service.c/h   # ONVIF SOAP 服务
+│   ├── status_led.c/h      # 状态 LED 控制
+│   ├── time_sync.c/h       # NTP 时间同步
+│   ├── web_server.c/h      # HTTP 服务器 + REST API
+│   ├── webhook.c/h         # Webhook 事件转发
+│   ├── wifi_manager.c/h    # WiFi STA/AP 管理
+│   ├── cJSON.c/h           # JSON 解析器（第三方）
+│   ├── web_ui/             # SPIFFS 静态文件
+│   │   ├── index.html      # 主界面
+│   │   ├── preview.html    # 预览界面
+│   │   └── config.html     # 配置界面
 │   └── CMakeLists.txt      # 组件注册
-├── components/              # 功能模块
-│   ├── camera_driver/      # OV2640 摄像头驱动
-│   ├── config_manager/     # 配置管理系统
-│   ├── health_monitor/     # 健康监控模块
-│   ├── mjpeg_streamer/    # MJPEG 流媒体服务
-│   ├── motion_detect/      # 运动检测模块
-│   ├── status_led/        # LED 状态管理
-│   ├── time_sync/         # NTP 时间同步
-│   ├── web_server/        # HTTP 服务器
-│   └── wifi_manager/      # WiFi 管理模块
-├── main/web_ui/            # Web 界面文件
-│   ├── index.html         # 主界面
-│   ├── preview.html       # 预览界面
-│   └── config.html        # 配置界面
-└── CMakeLists.txt          # 项目主配置
+├── docs/                   # 双语文档（en/ + zh-CN/）
+├── .github/workflows/      # CI/CD
+├── CMakeLists.txt
+├── sdkconfig.defaults
+├── partitions.csv
+└── idf_component.yml       # ESP-IDF 组件依赖
 ```
 
 ## 🔧 核心模块详解

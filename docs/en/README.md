@@ -18,7 +18,13 @@ MiBeeCam is a compact, intelligent camera system built with ESP32-S3 and OV2640 
 - **Remote upload**: Automatic image upload to configurable server
 - **Web interface**: Built-in web dashboard for configuration and monitoring
 - **Real-time metrics**: Prometheus-compatible system metrics
-- **Compact design**: Optimized for embedded deployment
+- **mDNS discovery**: Access device via http://mibee.local
+- **WebSocket real-time push**: Real-time event push to web UI
+- **Webhook client**: Forward events to external HTTP endpoint
+- **ONVIF Profile S**: WS-Discovery discovery + SOAP service
+- **Backup SSID**: Auto-fallback to secondary WiFi on primary failure
+- **WiFi scan**: Scan nearby networks via REST API
+- **AT command interface**: 20 commands via UART0 serial
 
 ## Quick Start
 
@@ -26,7 +32,6 @@ MiBeeCam is a compact, intelligent camera system built with ESP32-S3 and OV2640 
 
 - ESP32-S3 development board
 - OV2640 camera module (8225N/GC2053)
-- MicroSD card (optional for additional storage)
 
 ### Software Requirements
 
@@ -63,52 +68,55 @@ idf.py -p COMx flash monitor
 
 ### WiFi Setup
 
-Configure WiFi credentials in `main/main.c`:
+WiFi credentials are configured at runtime (no code changes needed):
 
-```c
-#define WIFI_SSID "your-wifi-ssid"
-#define WIFI_PASS "your-wifi-password"
-```
+1. **First boot**: Device enters AP mode (SSID: MiBeeCam, password: 12345678)
+2. **Web UI**: Open http://192.168.4.1, enter WiFi credentials on config page
+3. **AT Commands**: Use `AT+CWJAP=<ssid>,<pwd>` via UART0 serial (115200 baud)
+4. **Backup WiFi**: Use `AT+CWJAP2=<ssid>,<pwd>` for fallback SSID
 
 ### Server Configuration
 
-Set image upload server:
-
-```c
-#define SERVER_URL "https://your-server.com/upload"
-#define DEVICE_ID "camera-device-001"
-```
+Configure image upload server via Web UI or AT commands:
+- **Web UI**: Set server URL on config page
+- **AT Commands**: `AT+CFGSET=server_url,http://your-server.com/upload`
 
 ### Motion Detection
 
-Adjust motion sensitivity:
-
-```c
-#define MOTION_THRESHOLD 5        // Sensitivity (1-100)
-#define MOTION_COOLDOWN 10       // Cooldown in seconds
-```
+Adjust motion sensitivity via Web UI or AT commands:
+- **Web UI**: Set threshold and cooldown on config page
+- **AT Commands**: `AT+CFGSET=motion_threshold,5` and `AT+CFGSET=motion_cooldown,10`
 
 ## Project Structure
 
 ```
 luatos-esp32s3-a10-camera/
 ├── main/
-│   ├── main.c              # System entry and startup
+│   ├── main.c              # System entry, 15-step startup
+│   ├── at_command.c/h      # UART0 AT command interface (20 commands)
+│   ├── camera_driver.c/h   # OV2640 camera driver
+│   ├── config_manager.c/h  # NVS config storage
+│   ├── event_bus.c/h       # In-memory pub/sub event bus
+│   ├── frame_broadcaster.c/h # DRAM frame cache
+│   ├── health_monitor.c/h  # Health monitoring + Prometheus
+│   ├── motion_detect.c/h   # Motion detection
+│   ├── mjpeg_streamer.c/h  # MJPEG streaming
+│   ├── onvif_discovery.c/h # ONVIF WS-Discovery
+│   ├── onvif_service.c/h   # ONVIF SOAP service
+│   ├── status_led.c/h      # Status LED control
+│   ├── time_sync.c/h       # NTP time sync
+│   ├── web_server.c/h      # HTTP server + REST API
+│   ├── webhook.c/h         # Webhook event forwarding
+│   ├── wifi_manager.c/h    # WiFi STA/AP management
+│   ├── cJSON.c/h           # JSON parser (third-party)
+│   ├── web_ui/             # SPIFFS static files
 │   └── CMakeLists.txt      # Component registration
-├── camera_driver/          # OV2640 camera driver
-├── config_manager/         # Configuration management
-├── health_monitor/         # System health monitoring
-├── mjpeg_streamer/         # MJPEG streaming service
-├── motion_detect/          # Motion detection and upload
-├── status_led/             # Status LED control
-├── time_sync/             # NTP time synchronization
-├── web_server/            # HTTP server and web interface
-├── wifi_manager/           # WiFi connection management
-├── cJSON/                  # JSON parser
-├── main/web_ui/            # Web interface files
-├── partitions.csv          # Flash partition table
-├── CMakeLists.txt          # Project configuration
-└── sdkconfig.defaults      # Default configuration
+├── docs/                   # Bilingual documentation (en/ + zh-CN/)
+├── .github/workflows/      # CI/CD
+├── CMakeLists.txt
+├── sdkconfig.defaults
+├── partitions.csv
+└── idf_component.yml       # ESP-IDF component dependencies
 ```
 
 ## Technical Specifications
