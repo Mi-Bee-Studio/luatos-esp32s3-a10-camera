@@ -1,0 +1,371 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>MiBeeCam - Setup Wizard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f5f3ff;color:#1e1b4b;min-height:100vh;display:flex;flex-direction:column}
+.hd{background:linear-gradient(135deg,#7C3AED,#6D28D9);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.hd h1{font-size:18px;font-weight:600}.hd .ver{font-size:11px;opacity:.7}
+.progress{display:flex;align-items:center;justify-content:center;padding:20px 16px 14px;gap:0;flex-shrink:0;background:#f5f3ff}
+.progress .p-step{display:flex;align-items:center}
+.progress .p-dot{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #d1d0ff;color:#9ca3af;background:#fff;transition:all .3s;flex-shrink:0}
+.progress .p-dot.active{border-color:#7C3AED;background:#7C3AED;color:#fff;box-shadow:0 0 8px rgba(124,58,237,.4)}
+.progress .p-dot.done{border-color:#7C3AED;background:#ede9fe;color:#7C3AED}
+.progress .p-line{width:28px;height:2px;background:#d1d0ff;margin:0 2px;transition:background .3s}
+.progress .p-line.done{background:#7C3AED}
+.progress .p-label{display:none}
+.ct{flex:1;max-width:540px;margin:0 auto;padding:0 16px 80px;width:100%}
+.hidden{display:none!important}
+.step-title{font-size:20px;font-weight:700;color:#1e1b4b;margin-bottom:6px;text-align:center}
+.step-desc{font-size:13px;color:#6b7280;margin-bottom:16px;text-align:center}
+.cd{background:#fff;border-radius:8px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(124,58,237,.1)}
+.cd h3{font-size:14px;color:#7C3AED;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.fg{margin-bottom:14px}.fg:last-child{margin-bottom:0}
+.fg label{display:block;font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:500}
+.fg input,.fg select{width:100%;padding:10px 12px;border:1px solid #e9e5ff;border-radius:6px;font-size:14px;background:#faf9ff;color:#1e1b4b;outline:none;transition:border .2s}
+.fg input:focus,.fg select:focus{border-color:#7C3AED}
+.fg .pw-wrap{position:relative}.fg .pw-wrap input{padding-right:36px}
+.fg .pw-wrap .eye{position:absolute;right:8px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:12px;color:#9ca3af;user-select:none}
+.fg .hint{font-size:11px;color:#9ca3af;margin-top:3px}
+.welcome-logo{width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,#7C3AED,#6D28D9);display:flex;align-items:center;justify-content:center;margin:0 auto 12px;color:#fff;font-size:24px;font-weight:800}
+.welcome-info{text-align:center;margin-bottom:16px}
+.welcome-info p{font-size:13px;color:#6b7280;margin:3px 0}
+.nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #e9e5ff;padding:10px 16px;display:flex;gap:10px;box-shadow:0 -2px 8px rgba(0,0,0,.06)}
+.nav .btn{flex:1;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .2s}
+.nav .btn:active{opacity:.7}.nav .btn:disabled{opacity:.4;cursor:default}
+.nav .btn.pri{background:#7C3AED;color:#fff}.nav .btn.sec{background:#ede9fe;color:#6D28D9}
+.nav .btn-out{background:transparent;color:#6b7280;border:1px solid #e9e5ff}
+.toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#1e1b4b;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:99;opacity:0;transition:opacity .3s;pointer-events:none;max-width:90%;text-align:center}
+.toast.show{opacity:1}
+.spinner{text-align:center;padding:20px;color:#9ca3af;font-size:13px}
+.spinner::before{content:'';display:inline-block;width:18px;height:18px;border:2px solid #e9e5ff;border-top-color:#7C3AED;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.wifi-card{display:flex;align-items:center;padding:10px 12px;border:1px solid #e9e5ff;border-radius:6px;margin-bottom:6px;cursor:pointer;transition:all .15s;background:#faf9ff}
+.wifi-card:hover{border-color:#7C3AED;background:#f3f0ff}
+.wifi-card.selected{border-color:#7C3AED;background:#ede9fe;box-shadow:0 0 0 1px #7C3AED}
+.wifi-card .ssid{flex:1;font-size:13px;font-weight:500;color:#1e1b4b}
+.wifi-card .rssi{font-size:11px;color:#6b7280;margin-right:8px}
+.wifi-card .auth{font-size:11px;color:#9ca3af;margin-right:6px}
+.wifi-card .lock{color:#7C3AED;font-size:12px}
+.manual-link{text-align:center;padding:10px;font-size:12px;color:#7C3AED;cursor:pointer;text-decoration:underline}
+.manual-link:hover{color:#6D28D9}
+.summary-table{width:100%;border-collapse:collapse;font-size:13px}
+.summary-table td{padding:8px 4px;border-bottom:1px solid #f3f0ff}
+.summary-table td:first-child{color:#6b7280;width:40%}
+.summary-table td:last-child{color:#1e1b4b;font-weight:500}
+.summary-table tr:last-child td{border-bottom:none}
+.summary-section{margin-bottom:8px}
+.summary-section:last-child{margin-bottom:0}
+.empty-val{color:#9ca3af;font-style:italic;font-weight:400!important}
+.success-icon{display:inline-block;width:48px;height:48px;border-radius:50%;background:#10b981;color:#fff;font-size:24px;line-height:48px;text-align:center;margin:0 auto 12px}
+.check-row{display:flex;align-items:center;gap:8px;padding:6px 0}
+.check-row input[type=checkbox]{width:18px;height:18px;accent-color:#7C3AED;cursor:pointer}
+.check-row label{font-size:13px;color:#1e1b4b;cursor:pointer;flex:1}
+.check-row .hint{font-size:11px;color:#9ca3af}
+.toggle-group{display:flex;flex-direction:column;gap:4px}
+@media(max-width:480px){
+.progress .p-line{width:18px}
+.progress .p-dot{width:24px;height:24px;font-size:10px}
+.step-title{font-size:18px}
+.ct{padding:0 12px 76px}
+.nav{padding:8px 12px}
+.nav .btn{padding:10px;font-size:13px}
+}
+</style></head><body>
+
+<div class="hd"><h1>MiBeeCam</h1><span class="ver">Setup Wizard</span></div>
+
+<div class="progress" id="progressBar">
+<div class="p-step"><div class="p-dot active" id="p1">1</div></div>
+<div class="p-line" id="l1"></div>
+<div class="p-step"><div class="p-dot" id="p2">2</div></div>
+<div class="p-line" id="l2"></div>
+<div class="p-step"><div class="p-dot" id="p3">3</div></div>
+<div class="p-line" id="l3"></div>
+<div class="p-step"><div class="p-dot" id="p4">4</div></div>
+<div class="p-line" id="l4"></div>
+<div class="p-step"><div class="p-dot" id="p5">5</div></div>
+</div>
+
+<div class="ct">
+
+<!-- Step 1: Welcome -->
+<div class="step-content" id="step-1">
+<div class="welcome-logo">M</div>
+<div class="welcome-info">
+<div class="step-title" id="welcomeTitle">Welcome to MiBeeCam</div>
+<p id="welcomeDevice">Device: <span id="deviceLabel">-</span></p>
+<p id="welcomeVersion">Firmware: <span id="fwVersion">-</span></p>
+</div>
+<div class="cd" style="text-align:center">
+<p style="font-size:13px;color:#6b7280;line-height:1.6">This wizard will help you configure your camera<br>in just a few steps.</p>
+<p style="font-size:13px;color:#6b7280;margin-top:10px">You'll need:<br>Your WiFi network name and password.</p>
+</div>
+</div>
+
+<!-- Step 2: WiFi Configuration -->
+<div class="step-content hidden" id="step-2">
+<div class="step-title">WiFi Configuration</div>
+<div class="step-desc">Select your network or enter details manually</div>
+<div class="cd"><h3>Scan Networks</h3><div id="wifi-list"><div class="spinner">Scanning...</div></div><div class="manual-link" onclick="showManualWifi()">+ Enter SSID manually</div></div>
+<div class="cd" id="wifiManual" style="display:none"><h3>Manual Entry</h3>
+<div class="fg"><label>Primary SSID <span style="color:#dc2626">*</span></label><input type="text" id="wifi_ssid" placeholder="Network name"></div>
+<div class="fg"><label>Password</label><div class="pw-wrap"><input type="password" id="wifi_pass" placeholder="Network password"><span class="eye" onclick="toggleEye(this)">Show</span></div></div>
+<div class="fg" style="margin-top:12px;border-top:1px solid #f3f0ff;padding-top:12px"><label>Backup SSID (optional)</label><input type="text" id="wifi_ssid2" placeholder="Secondary network name"></div>
+<div class="fg"><label>Backup Password</label><div class="pw-wrap"><input type="password" id="wifi_pass2" placeholder="Secondary password"><span class="eye" onclick="toggleEye(this)">Show</span></div></div>
+</div>
+</div>
+
+<!-- Step 3: Device Identity -->
+<div class="step-content hidden" id="step-3">
+<div class="step-title">Device Identity</div>
+<div class="step-desc">Give your camera a unique name</div>
+<div class="cd"><h3>Identity</h3>
+<div class="fg"><label>Device Name</label><input type="text" id="device_name" value="MiBeeCam" placeholder="My Camera" maxlength="32"><div class="hint">Friendly name shown in the dashboard</div></div>
+<div class="fg"><label>mDNS Hostname</label><input type="text" id="mdns_hostname" value="mibee" placeholder="mibee" maxlength="32" pattern="[a-z0-9-]+"><div class="hint">Only lowercase letters, digits, and hyphens. Accessible at <span id="mdnsHint">mibee.local</span></div></div>
+<div class="fg"><label>Timezone</label><select id="timezone">
+<option value="CST-8">China Standard (UTC+8)</option>
+<option value="UTC">UTC</option>
+<option value="UTC-5">EST (UTC-5)</option>
+<option value="UTC-8">PST (UTC-8)</option>
+<option value="UTC+9">JST (UTC+9)</option>
+<option value="UTC+0">GMT (UTC+0)</option>
+<option value="UTC+1">CET (UTC+1)</option>
+</select><div class="hint">Used for event timestamps</div></div>
+</div>
+</div>
+
+<!-- Step 4: Optional Features -->
+<div class="step-content hidden" id="step-4">
+<div class="step-title">Optional Features</div>
+<div class="step-desc">Configure advanced features (all optional)</div>
+<div class="cd"><h3>Webhook</h3>
+<div class="fg"><label>Webhook URL</label><input type="text" id="webhook_url" placeholder="http://example.com/webhook"><div class="hint">Receive HTTP POST notifications on motion detection</div></div>
+<div class="fg"><label>Webhook Secret</label><div class="pw-wrap"><input type="password" id="webhook_secret" placeholder="HMAC secret"><span class="eye" onclick="toggleEye(this)">Show</span></div><div class="hint">Optional HMAC-SHA256 signing key</div></div>
+</div>
+<div class="cd"><h3>Protocols</h3>
+<div class="toggle-group">
+<div class="check-row"><input type="checkbox" id="onvif_enabled"><label for="onvif_enabled">ONVIF Discovery</label><span class="hint">Allows ONVIF-compatible NVRs to find this camera</span></div>
+<div class="check-row"><input type="checkbox" id="ws_enabled" checked><label for="ws_enabled">WebSocket Push</label><span class="hint">Real-time event push to subscribed clients</span></div>
+</div>
+</div>
+</div>
+
+<!-- Step 5: Confirm -->
+<div class="step-content hidden" id="step-5">
+<div class="step-title">Confirm Settings</div>
+<div class="step-desc">Review your configuration before applying</div>
+<div class="cd" id="summaryContainer"><div class="spinner">Preparing summary...</div></div>
+</div>
+
+</div><!-- /.ct -->
+
+<div class="nav" id="navBar">
+<button class="btn btn-out" id="btnBack" onclick="prevStep()">Back</button>
+<button class="btn pri" id="btnNext" onclick="handleNext()">Next</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var TZ_LABELS={'CST-8':'China Standard (UTC+8)','UTC':'UTC','UTC-5':'EST (UTC-5)','UTC-8':'PST (UTC-8)','UTC+9':'JST (UTC+9)','UTC+0':'GMT (UTC+0)','UTC+1':'CET (UTC+1)'};
+var currentStep=1,totalSteps=5,scanAttempted=false,deviceInfo={};
+
+function toast(msg){
+var t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
+setTimeout(function(){t.classList.remove('show')},3000)
+}
+
+function toggleEye(el){
+var inp=el.parentElement.getElementsByTagName('input')[0];
+inp.type=inp.type==='password'?'text':'password'
+}
+
+function updateProgress(){
+for(var i=1;i<=totalSteps;i++){
+var dot=document.getElementById('p'+i);
+dot.className='p-dot'+(i===currentStep?' active':i<currentStep?' done':'');
+if(i<totalSteps){
+var line=document.getElementById('l'+i);
+line.className='p-line'+(i<currentStep?' done':'')
+}
+}
+var btnBack=document.getElementById('btnBack');
+var btnNext=document.getElementById('btnNext');
+if(currentStep===1){btnBack.style.display='none';btnNext.textContent='Get Started'}
+else if(currentStep===totalSteps){btnBack.style.display='block';btnNext.textContent='Apply Settings'}
+else{btnBack.style.display='block';btnNext.textContent='Next'}
+}
+
+function showStep(n){
+document.querySelectorAll('.step-content').forEach(function(el){el.classList.add('hidden')});
+document.getElementById('step-'+n).classList.remove('hidden');
+currentStep=n;
+updateProgress();
+if(n===2&&!scanAttempted){scanAttempted=true;scanWifi()}
+if(n===5)buildSummary();
+}
+
+function nextStep(){if(currentStep<totalSteps)showStep(currentStep+1)}
+function prevStep(){if(currentStep>1)showStep(currentStep-1)}
+
+function handleNext(){
+if(currentStep<totalSteps){
+if(currentStep===2&&!validateWifi())return;
+if(currentStep===3&&!validateIdentity())return;
+nextStep()
+}else{
+submitConfig()
+}
+}
+
+function validateWifi(){
+var ssid=document.getElementById('wifi_ssid').value.trim();
+if(!ssid){toast('Please enter or select a WiFi network');return false}
+return true
+}
+
+function validateIdentity(){
+var mdns=document.getElementById('mdns_hostname').value.trim();
+if(mdns&&!/^[a-z0-9-]+$/.test(mdns)){toast('mDNS hostname: only lowercase letters, digits, and hyphens');return false}
+if(mdns.length>32){toast('mDNS hostname: max 32 characters');return false}
+var url=document.getElementById('webhook_url').value.trim();
+if(url&&url.indexOf('http://')!==0&&url.indexOf('https://')!==0){toast('Webhook URL must start with http:// or https://');return false}
+return true
+}
+
+// Step 1: Load device info
+function loadDeviceInfo(){
+fetch('/api/status').then(function(r){return r.json()}).then(function(d){
+deviceInfo=d;
+document.getElementById('deviceLabel').textContent=d.device_name||'MiBeeCam';
+document.getElementById('fwVersion').textContent=d.version||'-';
+}).catch(function(){
+document.getElementById('deviceLabel').textContent='MiBeeCam';
+document.getElementById('fwVersion').textContent='-'
+})
+}
+
+// Step 2: WiFi scan
+function showManualWifi(){
+document.getElementById('wifiManual').style.display='block';
+var list=document.getElementById('wifi-list');
+list.innerHTML='<p style="font-size:12px;color:#6b7280;text-align:center;padding:8px">Manual entry mode</p>'
+}
+
+function scanWifi(){
+var list=document.getElementById('wifi-list');
+list.innerHTML='<div class="spinner">Scanning...</div>';
+document.getElementById('wifiManual').style.display='none';
+fetch('/api/wifi/scan').then(function(r){
+if(!r.ok)throw new Error('Scan failed');
+return r.json()
+}).then(function(networks){
+list.innerHTML='';
+if(!networks||networks.length===0){
+list.innerHTML='<p style="font-size:12px;color:#6b7280;text-align:center;padding:16px">No networks found. Enter SSID manually below.</p>';
+return
+}
+networks.forEach(function(net){
+if(!net.ssid)return;
+var card=document.createElement('div');
+card.className='wifi-card';
+var bars='';
+var rssi=net.rssi||-100;
+if(rssi>-50)bars='\u25A0\u25A0\u25A0\u25A0';
+else if(rssi>-60)bars='\u25A0\u25A0\u25A0\u25A1';
+else if(rssi>-70)bars='\u25A0\u25A0\u25A1\u25A1';
+else if(rssi>-80)bars='\u25A0\u25A1\u25A1\u25A1';
+else bars='\u25A1\u25A1\u25A1\u25A1';
+var auth=net.auth||'OPEN';
+var lock=auth!=='OPEN'?'\uD83D\uDD12':'';
+card.innerHTML='<span class="ssid">'+net.ssid+'</span><span class="auth">'+auth+'</span><span class="lock">'+lock+'</span><span class="rssi">'+rssi+'dBm</span><span class="bars" style="font-size:12px;color:#7C3AED">'+bars+'</span>';
+card.onclick=function(){
+document.querySelectorAll('.wifi-card').forEach(function(c){c.classList.remove('selected')});
+card.classList.add('selected');
+document.getElementById('wifi_ssid').value=net.ssid;
+document.getElementById('wifiManual').style.display='block'
+};
+list.appendChild(card)
+})
+}).catch(function(){
+list.innerHTML='<p style="font-size:12px;color:#6b7280;text-align:center;padding:16px">Scan failed. Enter SSID manually below.</p>'
+})
+}
+
+// Step 5: Build summary
+function buildSummary(){
+var vals=getFormValues();
+var html='<div class="summary-section"><table class="summary-table">';
+html+='<tr><td>WiFi Network</td><td>'+(vals.wifi_ssid||'<span class="empty-val">Not set</span>')+'</td></tr>';
+if(vals.wifi_ssid2)html+='<tr><td>Backup Network</td><td>'+vals.wifi_ssid2+'</td></tr>';
+html+='</table></div>';
+html+='<div class="summary-section" style="border-top:1px solid #f3f0ff;padding-top:8px"><table class="summary-table">';
+html+='<tr><td>Device Name</td><td>'+(vals.device_name||'<span class="empty-val">Not set</span>')+'</td></tr>';
+html+='<tr><td>mDNS</td><td>'+(vals.mdns_hostname||'<span class="empty-val">Not set</span>')+'.local</td></tr>';
+html+='<tr><td>Timezone</td><td>'+(TZ_LABELS[vals.timezone]||vals.timezone||'CST-8')+'</td></tr>';
+html+='</table></div>';
+html+='<div class="summary-section" style="border-top:1px solid #f3f0ff;padding-top:8px"><table class="summary-table">';
+if(vals.webhook_url)html+='<tr><td>Webhook</td><td>'+vals.webhook_url+'</td></tr>';
+html+='<tr><td>ONVIF</td><td>'+(vals.onvif_enabled?'Enabled':'Disabled')+'</td></tr>';
+html+='<tr><td>WebSocket</td><td>'+(vals.ws_enabled?'Enabled':'Disabled')+'</td></tr>';
+html+='</table></div>';
+html+='<p style="font-size:12px;color:#6b7280;text-align:center;margin-top:12px">Press "Apply Settings" to save and activate your configuration.</p>';
+document.getElementById('summaryContainer').innerHTML=html
+}
+
+function getFormValues(){
+return{
+wifi_ssid:document.getElementById('wifi_ssid').value.trim(),
+wifi_pass:document.getElementById('wifi_pass').value,
+wifi_ssid2:document.getElementById('wifi_ssid2').value.trim(),
+wifi_pass2:document.getElementById('wifi_pass2').value,
+device_name:document.getElementById('device_name').value.trim(),
+mdns_hostname:document.getElementById('mdns_hostname').value.trim().toLowerCase(),
+timezone:document.getElementById('timezone').value,
+webhook_url:document.getElementById('webhook_url').value.trim(),
+webhook_secret:document.getElementById('webhook_secret').value,
+onvif_enabled:document.getElementById('onvif_enabled').checked,
+ws_enabled:document.getElementById('ws_enabled').checked
+}
+}
+
+function submitConfig(){
+var vals=getFormValues();
+var config={
+wifi_ssid:vals.wifi_ssid,
+device_name:vals.device_name||'MiBeeCam',
+mdns_hostname:vals.mdns_hostname||'mibee',
+timezone:vals.timezone||'CST-8',
+ws_enabled:vals.ws_enabled?1:0,
+onvif_enabled:vals.onvif_enabled?1:0
+};
+if(vals.wifi_pass)config.wifi_pass=vals.wifi_pass;
+if(vals.wifi_ssid2){config.wifi_ssid2=vals.wifi_ssid2;if(vals.wifi_pass2)config.wifi_pass2=vals.wifi_pass2}
+if(vals.webhook_url)config.webhook_url=vals.webhook_url;
+if(vals.webhook_secret)config.webhook_secret=vals.webhook_secret;
+var btn=document.getElementById('btnNext');
+btn.disabled=true;
+btn.textContent='Applying...';
+fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}).then(function(r){
+if(!r.ok)throw new Error('Save failed');
+return r.json()
+}).then(function(d){
+if(d.success){window.location.href='/'}
+else{toast(d.message||'Failed to save configuration');btn.disabled=false;btn.textContent='Apply Settings'}
+}).catch(function(){
+toast('Failed to save configuration. Please try again.');
+btn.disabled=false;
+btn.textContent='Apply Settings'
+})
+}
+
+// MDNS hint update
+document.addEventListener('DOMContentLoaded',function(){
+document.getElementById('mdns_hostname').addEventListener('input',function(){
+var v=this.value.trim().toLowerCase()||'mibee';
+document.getElementById('mdnsHint').textContent=v+'.local'
+});
+loadDeviceInfo();
+updateProgress()
+});
+</script>
+</body></html>
