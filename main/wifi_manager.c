@@ -10,10 +10,11 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include <string.h>
+#include "event_bus.h"
 #ifdef CONFIG_MIBEECAM_ENABLE_MDNS
 #include "mdns.h"
-#include "config_manager.h"
 #endif
+#include "config_manager.h"
 
 static const char *TAG = "wifi_manager";
 
@@ -39,6 +40,11 @@ static int s_retry_count = 0;
 #define RETRY_DELAY_S 10
 #define RETRY_LOG_INTERVAL 10  // Log every N retries
 
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+static int s_active_ssid_index = 0;  // 0=primary, 1=backup
+static int s_primary_fail_count = 0; // consecutive failures on primary
+#define BACKUP_SSID_FAIL_THRESHOLD 3
+#endif
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data);
 static void notify_state(wifi_state_t new_state);
@@ -108,6 +114,38 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         case WIFI_EVENT_STA_DISCONNECTED: {
             wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)event_data;
             s_retry_count++;
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+            // Backup SSID fallback logic
+            const cam_config_t *cfg = config_get();
+            if (cfg->wifi_ssid2[0] != '\0') {
+                if (s_active_ssid_index == 0) {
+                    // Currently on primary — check fail count
+                    s_primary_fail_count++;
+                    if (s_primary_fail_count >= BACKUP_SSID_FAIL_THRESHOLD) {
+                        ESP_LOGW(TAG, "Primary SSID failed %d times, switching to backup: %s",
+                                 s_primary_fail_count, cfg->wifi_ssid2);
+                        s_active_ssid_index = 1;
+                        s_retry_count = 0;
+                        event_t event = {
+                            .type = EVENT_WIFI_SWITCHED_SSID,
+                            .timestamp = esp_timer_get_time(),
+                            .payload = NULL,
+                            .payload_len = 0,
+                        };
+                        event_bus_publish(&event);
+                        wifi_start_sta(cfg->wifi_ssid2, cfg->wifi_pass2);
+                        break;  // Skip normal retry — wifi_start_sta already called
+                    }
+                } else {
+                    // Currently on backup — if backup also fails, fall to AP
+                    if (s_retry_count > BACKUP_SSID_FAIL_THRESHOLD * 2) {
+                        ESP_LOGW(TAG, "Backup SSID also failed, falling back to AP mode");
+                        wifi_start_ap();
+                        break;
+                    }
+                }
+            }
+#endif
             // Log every RETRY_LOG_INTERVAL attempts, or first few
             if (s_retry_count <= 3 || s_retry_count % RETRY_LOG_INTERVAL == 0) {
                 ESP_LOGW(TAG, "STA disconnected, reason=%d (0x%x), retrying (attempt %d, no fallback)",
@@ -144,6 +182,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             snprintf(s_ip_str, sizeof(s_ip_str), IPSTR, IP2STR(&event->ip_info.ip));
             ESP_LOGI(TAG, "STA got IP: %s", s_ip_str);
             s_retry_count = 0;
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+            s_primary_fail_count = 0;
+            // Note: s_active_ssid_index stays as-is (successfully connected)
+#endif
             set_state(WIFI_STATE_STA_CONNECTED);
 #ifdef CONFIG_MIBEECAM_ENABLE_MDNS
             // Start mDNS with configured hostname
@@ -295,6 +337,17 @@ esp_err_t wifi_start_sta(const char *ssid, const char *pass)
         return ESP_ERR_INVALID_ARG;
     }
 
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+    // Track which SSID index we're connecting to
+    const cam_config_t *cfg = config_get();
+    if (strcmp(ssid, cfg->wifi_ssid) == 0) {
+        s_active_ssid_index = 0;
+        s_primary_fail_count = 0;
+    } else if (strcmp(ssid, cfg->wifi_ssid2) == 0) {
+        s_active_ssid_index = 1;
+    }
+#endif
+
     esp_err_t ret;
 
     wifi_config_t wifi_config = {
@@ -376,6 +429,16 @@ const char *wifi_get_ip_str(void)
 {
     return s_ip_str;
 }
+
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+int wifi_get_current_ssid_index(void)
+{
+    wifi_state_t state = wifi_get_state();
+    if (state == WIFI_STATE_AP) return -1;
+    if (state != WIFI_STATE_STA_CONNECTED) return s_active_ssid_index;
+    return s_active_ssid_index;
+}
+#endif
 
 esp_err_t wifi_register_callback(wifi_state_callback_t cb, void *user_data)
 {

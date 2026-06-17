@@ -221,6 +221,10 @@ static esp_err_t handler_api_status(httpd_req_t *req)
         }
     }
 
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+    cJSON_AddNumberToObject(root, "active_ssid_index", wifi_get_current_ssid_index());
+#endif
+
     cJSON_AddStringToObject(root, "camera", camera_get_sensor_name());
     cJSON_AddStringToObject(root, "resolution", res_to_str(cfg->resolution));
 

@@ -107,4 +107,12 @@ esp_err_t wifi_start_mdns(const char *hostname);
  */
 esp_err_t wifi_stop_mdns(void);
 #endif
+
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+/**
+ * @brief Get which SSID is currently active
+ * @return 0 = primary SSID, 1 = backup SSID, -1 = AP mode or not connected
+ */
+int wifi_get_current_ssid_index(void);
+#endif
 #endif // WIFI_MANAGER_H
