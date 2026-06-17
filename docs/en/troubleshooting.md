@@ -329,16 +329,43 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_DEFAULT_LEVEL=3
 ```
 
-**Fix 3 (auxiliary): TX power boost**
+**Fix 3 (THE critical fix): Power save must be set AFTER wifi_start**
+```c
+// WRONG — silently ignored, power-save stays on, EAPOL frames dropped:
+esp_wifi_set_ps(WIFI_PS_NONE);  // before start
+esp_wifi_start();
+
+// CORRECT:
+esp_wifi_start();
+esp_wifi_set_ps(WIFI_PS_NONE);  // after start — takes effect
+```
+This was the root cause of connection failures. Calling `esp_wifi_set_ps()` before `esp_wifi_start()` is silently ignored.
+
+**Fix 4: WiFi STA config must match working config**
+```c
+wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;  // auto-negotiate (NOT WPA2_PSK)
+wifi_config.sta.pmf_cfg.capable = true;
+wifi_config.sta.pmf_cfg.required = false;
+wifi_config.sta.listen_interval = 3;  // lower = better (NOT 10)
+// scan_method defaults to FAST_SCAN (do NOT set ALL_CHANNEL_SCAN)
+```
+
+**Fix 5: DHCP hostname**
+```c
+// Before esp_wifi_start(), set hostname so router shows device name:
+esp_netif_set_hostname(s_sta_netif, config_get()->device_name);
+```
+
+**Fix 6: No redundant esp_wifi_connect()**
+The WIFI_EVENT_STA_START handler must NOT call `esp_wifi_connect()`. Single connect call after `esp_wifi_set_ps()` in `wifi_start_sta()` only. Double-connect causes race conditions.
+
+**Fix 7 (auxiliary): TX power boost**
 Boost TX power to improve connection stability:
 ```c
 ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(15));
 ```
 
-**Fix 4 (auxiliary): Call `esp_wifi_connect()` directly**
-Call `esp_wifi_connect()` immediately after `esp_wifi_start()` instead of relying solely on the `WIFI_EVENT_STA_START` handler, reducing race conditions.
-
-**Fix 5 (auxiliary): Defer state callbacks**
+**Fix 8 (auxiliary): Defer state callbacks**
 The WiFi state callback (`wifi_state_cb`) runs `time_sync_init()`, `web_server_start()`, `motion_detect_start()` from the event handler context. Post the callback to the default event loop to avoid contributing to WiFi task stack pressure:
 ```c
 // Instead of calling s_callback() directly, post to event loop
@@ -346,11 +373,12 @@ esp_event_post(WIFI_MANAGER_EVENTS, (int32_t)new_state, NULL, 0, portMAX_DELAY);
 ```
 
 **Working connection flow**:
-1. `init -> auth` — driver skips SAE (AMPDU-disabled code path), uses Open System auth
-2. `auth -> assoc` — association request sent
-3. `assoc -> run` — connection established (no stack overflow because log level is INFO)
-4. `got IP` — DHCP completes, callback runs in event loop task (4096B stack)
+1. `esp_wifi_stop()` → `set_mode(STA)` → `set_config()` → `set_hostname()` → `esp_wifi_start()`
+2. `esp_wifi_set_ps(WIFI_PS_NONE)` → `set_max_tx_power(15)` → `esp_wifi_connect()`
+3. `init → auth → assoc → run` (no SAE stall, no stack overflow)
+4. `got IP` — DHCP completes, callback fires in event loop task (4096B stack)
 
+> **Intermittent behavior**: First connection attempt may fail with reason=205 (HANDSHAKE_TIMEOUT). The retry mechanism (non-blocking, 10s interval) connects on the second attempt. This is expected — WPA2 4-way handshake occasionally needs a retry.
 **Verification**:
 ```bash
 curl http://<device-ip>/api/status
