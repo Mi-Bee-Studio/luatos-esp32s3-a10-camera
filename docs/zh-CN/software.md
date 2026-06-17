@@ -32,22 +32,26 @@ luatos-esp32s3-a10-base/
 
 ### 1. 主程序模块 (main.c)
 
-**功能**: 系统初始化和 14 步启动流程
+**功能**: 系统初始化和 ~19 步启动流程
 
 **启动顺序**:
 1. NVS 初始化
-2. 配置加载 (v1→v2 自动迁移)
+2. 配置加载 (v1→v2→v3 自动迁移)
 3. LED 初始化
+3.5 事件总线初始化 (模块间 pub/sub 通信)
 4. SPIFFS 挂载
 5. 摄像头初始化 (WiFi 之前，避免 I2C 冲突)
+5.5 帧广播器初始化 (DRAM 帧缓存，用于运动检测和视频流)
 6. WiFi 子系统初始化
 7. 健康监控初始化
 8. 模式选择 (STA 如果已配置 WiFi，否则 AP)
 9. STA: WiFi 连接 / AP: 启动热点
-10. MJPEG 流媒体初始化 (STA 模式)
+10. MJPEG 流媒体初始化
 11. Web 服务器启动
 12. NTP 时间同步 (STA 模式)
 13. 运动检测启动 (STA 模式)
+13.5 Webhook 初始化 (STA 模式，按配置 URL 条件启动)
+13.7 ONVIF 启动 (WS-Discovery + SOAP 服务，按配置条件启动)
 14. BOOT 按钮监控
 
 ### 2. 摄像头驱动模块 (camera_driver.c/h)
@@ -205,6 +209,60 @@ typedef struct {
 - 同步间隔: 1 小时
 - 时区: CST-8
 - 仅在 STA 模式下工作
+
+### 11. 事件总线模块 (event_bus.c/h)
+**文件**: `main/event_bus.c`  
+**功能**: 轻量级内存发布/订阅事件总线
+
+**特性**:
+- 9 种事件类型: 运动检测、WiFi 状态、流客户端、健康告警、上传结果
+- 最多 8 个订阅者，同步分发
+- 互斥锁保护订阅/取消订阅操作，线程安全
+- 被 webhook、WebSocket 事件推送、健康监控、WiFi 管理器、流媒体模块使用
+
+### 12. 帧广播器模块 (frame_broadcaster.c/h)
+**文件**: `main/frame_broadcaster.c`  
+**功能**: 单消费者 DRAM 帧缓存（引用计数）
+
+**特性**:
+- 50KB 静态 DRAM 缓冲区（PSRAM 已禁用）
+- 引用计数帧访问，acquire/release 模式
+- 丢弃策略：上一帧未释放时新帧被丢弃（绝不阻塞生产者）
+- 被运动检测和 MJPEG 流媒体模块作为主要帧源
+
+### 13. Webhook 模块 (webhook.c/h)
+**文件**: `main/webhook.c`  
+**功能**: 异步 HTTP Webhook 客户端，用于事件转发
+
+**特性**:
+- 专用 FreeRTOS 任务（优先级 2，栈 6144，核心 1）
+- 队列容量：8 个事件，满时丢弃最旧事件
+- JSON 负载：设备名、事件类型、时间戳、数据
+- 订阅所有 event_bus 事件实现自动转发
+- 发送结果发布 EVENT_UPLOAD_SUCCESS / EVENT_UPLOAD_FAILED
+- 默认禁用。需 CONFIG_MIBEECAM_ENABLE_WEBHOOK + 配置 webhook_url 非空
+
+### 14. ONVIF 发现模块 (onvif_discovery.c/h)
+**文件**: `main/onvif_discovery.c`  
+**功能**: ONVIF WS-Discovery UDP 多播监听
+
+**特性**:
+- 监听 239.255.255.250:3702 WS-Discovery Probe 消息
+- 回复 ProbeMatches，包含设备服务地址
+- 专用任务（优先级 3，栈 4096，核心 1）
+- 默认禁用。需 CONFIG_MIBEECAM_ENABLE_ONVIF + 配置 onvif_enabled=1
+
+### 15. ONVIF 服务模块 (onvif_service.c/h)
+**文件**: `main/onvif_service.c`  
+**功能**: ONVIF Profile S SOAP 服务处理器
+
+**特性**:
+- 注册 /onvif/device_service 和 /onvif/media_service POST 处理器
+- 实现 5 个 SOAP 方法: GetDeviceInformation, GetCapabilities, GetServices, GetProfiles, GetStreamUri
+- Profile S 子集（无 RTSP 服务器 — GetStreamUri 仅用于发现返回 rtsp:// URL）
+- 默认禁用。需 CONFIG_MIBEECAM_ENABLE_ONVIF + 配置 onvif_enabled=1
+
+
 
 ## 🔄 FreeRTOS 任务调度
 

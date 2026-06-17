@@ -32,27 +32,31 @@ The MiBeeCam software is designed as a real-time embedded system with multiple c
 
 ### 1. Main Module (`main.c`)
 **File**: `main/main.c`  
-**Lines**: 14-step startup sequence  
+**Lines**: ~19-step startup sequence  
 **Purpose**: System entry point and initialization orchestration
 
 **Startup Sequence**:
 1. NVS initialization
-2. Configuration loading (v1→v2 auto-migration)
+2. Configuration loading (v1→v2→v3 auto-migration)
 3. Status LED initialization (GPIO 10)
+3.5 Event bus initialization (inter-module pub/sub)
 4. SPIFFS mounting
 5. Camera initialization (BEFORE WiFi to avoid I2C conflict)
+5.5 Frame broadcaster initialization (DRAM frame cache for motion/stream)
 6. WiFi subsystem initialization
 7. Health monitor initialization
 8. WiFi mode selection (STA preferred, AP fallback)
 9. WiFi connection (STA) or hotspot start (AP)
-10. MJPEG streamer initialization (STA mode)
+10. MJPEG streamer initialization
 11. Web server startup
 12. NTP time synchronization (STA mode)
 13. Motion detection start (STA mode)
+13.5 Webhook init (STA mode, conditional on config URL)
+13.7 ONVIF start (discovery + SOAP service, conditional on config)
 14. BOOT button monitoring
 
 **Key Features**:
-- 14-step boot sequence with proper error handling
+- ~19-step boot sequence with proper error handling
 - Camera initialization before WiFi to prevent I2C bus conflicts
 - Comprehensive system health monitoring
 - Graceful degradation to AP mode if WiFi fails
@@ -207,6 +211,58 @@ The MiBeeCam software is designed as a real-time embedded system with multiple c
 - Lightweight JSON implementation
 - Used for API responses and configuration
 
+### 12. Event Bus (`event_bus.c/h`)
+**File**: `main/event_bus.c`  
+**Purpose**: Lightweight in-memory publish/subscribe event bus
+
+**Features**:
+- 9 event types: motion, WiFi state change, stream client, health warning, upload
+- Max 8 subscribers, synchronous dispatch
+- Thread-safe subscribe/unsubscribe via mutex
+- Used by webhook, WebSocket event push, health monitor, WiFi manager, streamer
+
+### 13. Frame Broadcaster (`frame_broadcaster.c/h`)
+**File**: `main/frame_broadcaster.c`  
+**Purpose**: Single-consumer DRAM frame cache with reference counting
+
+**Features**:
+- 50KB static DRAM buffer (PSRAM disabled)
+- Reference-counted frame access with acquire/release pattern
+- Drop policy: new frame dropped if previous frame still held (never blocks producer)
+- Used by motion detection and MJPEG streamer as primary frame source
+
+### 14. Webhook (`webhook.c/h`)
+**File**: `main/webhook.c`  
+**Purpose**: Asynchronous HTTP webhook client for event forwarding
+
+**Features**:
+- Dedicated FreeRTOS task (priority 2, stack 6144, core 1)
+- Queue capacity: 8 events, oldest dropped when full
+- JSON payload: device name, event type, timestamp, payload data
+- Subscribes to all event_bus events for automatic forwarding
+- Publishes EVENT_UPLOAD_SUCCESS / EVENT_UPLOAD_FAILED on result
+- Default disabled. Enable via CONFIG_MIBEECAM_ENABLE_WEBHOOK + non-empty webhook_url config
+
+### 15. ONVIF Discovery (`onvif_discovery.c/h`)
+**File**: `main/onvif_discovery.c`  
+**Purpose**: ONVIF WS-Discovery UDP multicast listener
+
+**Features**:
+- Listens on 239.255.255.250:3702 for WS-Discovery Probe messages
+- Responds with ProbeMatches containing device service address
+- Dedicated task (priority 3, stack 4096, core 1)
+- Default disabled. Enable via CONFIG_MIBEECAM_ENABLE_ONVIF + config onvif_enabled=1
+
+### 16. ONVIF Service (`onvif_service.c/h`)
+**File**: `main/onvif_service.c`  
+**Purpose**: ONVIF Profile S SOAP service handlers
+
+**Features**:
+- Registers /onvif/device_service and /onvif/media_service POST handlers
+- Implements 5 SOAP methods: GetDeviceInformation, GetCapabilities, GetServices, GetProfiles, GetStreamUri
+- Profile S subset (no RTSP server — GetStreamUri returns rtsp:// URL for discovery only)
+- Default disabled. Enable via CONFIG_MIBEECAM_ENABLE_ONVIF + config onvif_enabled=1
+
 ## FreeRTOS Task Architecture
 
 ### Task Configuration
@@ -269,6 +325,38 @@ The MiBeeCam software is designed as a real-time embedded system with multiple c
 - **Timeouts**: Configurable connection timeouts
 - **CORS**: Enabled for web interface
 
+### mDNS (Multicast DNS)
+- **Hostname**: Configurable via `mdns_hostname` (default: `mibee`)
+- **Access**: `http://mibee.local` (or custom hostname)
+- **Service**: `_http._tcp` on port 80 advertised on both STA and AP
+- **AP Mode**: Hostname suffixed with `-ap` (e.g., `mibee-ap.local`)
+- Requires `CONFIG_MIBEECAM_ENABLE_MDNS=y` (default: enabled)
+
+### WebSocket Server
+- **Endpoint**: `ws://<device-ip>/ws`
+- **Purpose**: Real-time event push to web UI clients
+- **Message Format**: JSON `{"type":"<event>","timestamp":<ms>}`
+- **Max Clients**: 5 concurrent connections
+- **Idle Timeout**: 60 seconds
+- **Events pushed**: motion detected, WiFi state, stream client connect/disconnect, health warning, upload status
+- Requires `CONFIG_MIBEECAM_ENABLE_WS=y` (default: enabled)
+
+### Webhook Client
+- **Purpose**: Forward events to external HTTP endpoint
+- **Trigger**: Motion detection, health warnings, upload results, etc.
+- **Payload**: JSON with device name, event type, timestamp, context data
+- **Queue**: Capacity 8 events, non-blocking emit, oldest dropped when full
+- **Timeout**: 5 seconds per request, no retry on failure
+- Requires `CONFIG_MIBEECAM_ENABLE_WEBHOOK=y` (default) + non-empty `webhook_url` config
+
+### ONVIF Protocol
+- **Profile**: ONVIF Profile S (subset)
+- **Discovery**: WS-Discovery on 239.255.255.250:3702
+- **Services**: Device service + Media service
+- **Methods**: GetDeviceInformation, GetCapabilities, GetServices, GetProfiles, GetStreamUri
+- **Note**: No RTSP server — GetStreamUri returns rtsp:// URL for discovery/configuration only
+- Requires `CONFIG_MIBEECAM_ENABLE_ONVIF=y` (default) + config `onvif_enabled=1`
+
 ## Upload Protocol
 
 ### Image Upload
@@ -290,18 +378,22 @@ Body: JPEG binary data
 
 ### Detailed Boot Flow
 1. **NVS Initialization**: Load configuration from flash
-2. **Config Migration**: Auto-migrate from v1 to v2 if needed
+2. **Config Migration**: Auto-migrate from v1 to v2 to v3 if needed
 3. **LED Initialization**: Status LED setup
+3.5 **Event Bus Init**: Lightweight pub/sub for inter-module communication
 4. **SPIFFS Mount**: Web file system mount
 5. **Camera Init**: OV2640 sensor initialization
+5.5 **Frame Broadcaster Init**: DRAM frame cache (reference-counted)
 6. **WiFi Setup**: Network subsystem initialization
 7. **Health Monitor**: System health service start
 8. **Mode Selection**: STA or AP mode decision
 9. **WiFi Connection**: Network establishment
 10. **Stream Service**: MJPEG streaming initialization
 11. **Web Server**: HTTP service startup
-12. **Time Sync**: NTP synchronization
-13. **Motion Detect**: Motion detection service start
+12. **Time Sync**: NTP synchronization (STA only)
+13. **Motion Detect**: Motion detection service start (STA only)
+13.5 **Webhook Init**: HTTP webhook client for event forwarding (STA only, conditional)
+13.7 **ONVIF Start**: WS-Discovery listener + SOAP service (conditional on config)
 14. **Boot Monitor**: Factory reset button monitoring
 
 ## Error Handling

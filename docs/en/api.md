@@ -219,6 +219,41 @@ POST /api/reboot
 
 **Status Code**: 202 Accepted
 
+### 5. WiFi Scan
+**Endpoint**: `GET /api/wifi/scan`  
+**Content-Type**: `application/json`  
+**Purpose**: Scan for available WiFi networks
+
+**Request**:
+```http
+GET /api/wifi/scan
+```
+
+**Response**:
+```json
+[
+    {
+        "ssid": "MyNetwork",
+        "rssi": -45,
+        "auth_mode": "WPA2_PSK",
+        "channel": 6
+    },
+    {
+        "ssid": "NeighborWiFi",
+        "rssi": -78,
+        "auth_mode": "WPA2_PSK",
+        "channel": 1
+    }
+]
+```
+
+**Notes**:
+- Returns up to 20 networks sorted by RSSI (strongest first)
+- Synchronous active scan, takes ~2 seconds
+- Works in any WiFi state (STA, AP, or disconnected)
+- Requires `CONFIG_MIBEECAM_ENABLE_WIFI_SCAN=y` (default: enabled)
+
+
 ## Streaming API
 
 ### 1. MJPEG Video Stream
@@ -323,16 +358,71 @@ mibeecam_free_heap_bytes 81920
 mibeecam_memory_usage_percent 60.5
 ```
 
-## WebSocket API (Future Enhancement)
+### 2. ONVIF Device Service
+**Endpoint**: `POST /onvif/device_service`  
+**Content-Type**: `text/xml; charset=utf-8`  
+**Purpose**: ONVIF Profile S device SOAP service
 
-### Planning Notes:
-- **WebSocket Endpoint**: `/ws` (planned)
-- **Purpose**: Real-time bidirectional communication
-- **Features**: 
-  - Live camera feed streaming
-  - Real-time system status updates
-  - Configuration push notifications
-  - Motion event notifications
+**Supported Methods**:
+- GetDeviceInformation: Returns manufacturer, model, firmware version, serial number
+- GetCapabilities: Returns device capabilities (media service URL)
+- GetServices: Returns list of available ONVIF services
+
+### 3. ONVIF Media Service
+**Endpoint**: `POST /onvif/media_service`  
+**Content-Type**: `text/xml; charset=utf-8`  
+**Purpose**: ONVIF Profile S media SOAP service
+
+**Supported Methods**:
+- GetProfiles: Returns one profile (MainStream) with MJPEG/VGA encoder config
+- GetStreamUri: Returns RTSP stream URI (rtsp://<ip>:8554/stream) — NOTE: RTSP server not implemented, URI for discovery only
+
+**Notes**:
+- Default disabled. Requires `CONFIG_MIBEECAM_ENABLE_ONVIF=y` + config `onvif_enabled=1`
+- No XML parser — SOAP dispatch via strstr() on raw request body
+
+
+## WebSocket API
+
+**Endpoint**: `ws://<device-ip>/ws`  
+**Purpose**: Real-time event push to web UI clients
+
+### Message Format
+All WebSocket messages are JSON with the following structure:
+```json
+{
+    "type": "<event_type>",
+    "timestamp": <unix_ms>
+}
+```
+
+### Event Types
+
+| Event Type | Description | Trigger |
+|------------|-------------|--------|
+| `motion_detected` | Motion event detected | Frame-difference algorithm |
+| `motion_end` | Motion detection ended | Cooldown expiry |
+| `wifi_state_changed` | WiFi connection state changed | State machine transition |
+| `wifi_switched_ssid` | Switched to backup SSID | Primary WiFi failure |
+| `stream_client_connected` | MJPEG stream client connected | New stream connection |
+| `stream_client_disconnected` | MJPEG stream client disconnected | Client left |
+| `health_warning` | System health warning (low heap) | Heap below 30KB threshold |
+| `upload_success` | Remote upload completed | Successful HTTP upload |
+| `upload_failed` | Remote upload failed | Upload error |
+
+### Client Example
+```javascript
+const ws = new WebSocket('ws://192.168.1.100/ws');
+ws.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    console.log('Event:', data.type, 'at', data.timestamp);
+};
+```
+
+**Notes**:
+- Max 5 concurrent WebSocket clients
+- 60 second idle timeout (auto-disconnect)
+- Requires `CONFIG_MIBEECAM_ENABLE_WS=y` (default: enabled)
 
 ## Error Handling
 

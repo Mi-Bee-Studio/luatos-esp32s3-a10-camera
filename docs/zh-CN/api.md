@@ -398,6 +398,58 @@ Content-Type: application/json
 - `400 Bad Request`: 参数错误
 - `500 Internal Server Error`: 系统错误
 
+### 11. WiFi 扫描
+**端点**: `GET /api/wifi/scan`  
+**内容类型**: `application/json`  
+**描述**: 扫描可用 WiFi 网络
+
+**请求**:
+```http
+GET /api/wifi/scan
+```
+
+**响应**:
+```json
+[
+    {
+        "ssid": "MyNetwork",
+        "rssi": -45,
+        "auth_mode": "WPA2_PSK",
+        "channel": 6
+    }
+]
+```
+
+**说明**:
+- 最多返回 20 个网络，按信号强度排序
+- 同步主动扫描，耗时约 2 秒
+- 支持所有 WiFi 状态（STA、AP 或未连接）
+- 需要 `CONFIG_MIBEECAM_ENABLE_WIFI_SCAN=y`（默认启用）
+
+### 12. ONVIF 设备服务
+**端点**: `POST /onvif/device_service`  
+**内容类型**: `text/xml; charset=utf-8`  
+**描述**: ONVIF Profile S 设备 SOAP 服务
+
+**支持方法**:
+- GetDeviceInformation: 返回制造商、型号、固件版本、序列号
+- GetCapabilities: 返回设备能力（媒体服务 URL）
+- GetServices: 返回可用 ONVIF 服务列表
+
+### 13. ONVIF 媒体服务
+**端点**: `POST /onvif/media_service`  
+**内容类型**: `text/xml; charset=utf-8`  
+**描述**: ONVIF Profile S 媒体 SOAP 服务
+
+**支持方法**:
+- GetProfiles: 返回一个视频配置 (MainStream)，含 MJPEG/VGA 编码配置
+- GetStreamUri: 返回 RTSP 流 URL (rtsp://<ip>:8554/stream) — 注意：未实现 RTSP 服务器，仅用于发现
+
+**说明**:
+- 默认禁用。需要 `CONFIG_MIBEECAM_ENABLE_ONVIF=y` + 配置 `onvif_enabled=1`
+- 无 XML 解析器 — 通过 strstr() 在原始请求体中分发 SOAP 方法
+
+---
 ---
 
 ### 10. Prometheus 指标
@@ -453,6 +505,49 @@ timestamp_seconds 1714360200
 - **定时更新**: 60 秒间隔
 
 ---
+
+### 14. WebSocket 实时推送
+
+**端点**: `ws://<device-ip>/ws`  
+**描述**: 实时事件推送到 Web UI 客户端
+
+### 消息格式
+所有 WebSocket 消息使用 JSON 格式：
+```json
+{
+    "type": "<event_type>",
+    "timestamp": <unix_ms>
+}
+```
+
+### 事件类型
+
+| 事件类型 | 描述 | 触发条件 |
+|---------|------|---------|
+| `motion_detected` | 检测到运动 | 帧差算法触发 |
+| `motion_end` | 运动检测结束 | 冷却时间到期 |
+| `wifi_state_changed` | WiFi 连接状态变化 | 状态机转换 |
+| `wifi_switched_ssid` | 切换到备用 SSID | 主 WiFi 连接失败 |
+| `stream_client_connected` | MJPEG 流客户端连接 | 新流连接 |
+| `stream_client_disconnected` | MJPEG 流客户端断开 | 客户端离开 |
+| `health_warning` | 系统健康告警（低堆内存） | 堆内存低于 30KB |
+| `upload_success` | 远程上传完成 | HTTP 上传成功 |
+| `upload_failed` | 远程上传失败 | 上传错误 |
+
+### 客户端示例
+```javascript
+const ws = new WebSocket('ws://192.168.1.100/ws');
+ws.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    console.log('事件:', data.type, '发生于', data.timestamp);
+};
+```
+
+**说明**:
+- 最大 5 个并发 WebSocket 客户端
+- 60 秒空闲超时（自动断开）
+- 需要 `CONFIG_MIBEECAM_ENABLE_WS=y`（默认启用）
+
 
 ## 🚀 错误处理
 

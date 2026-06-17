@@ -32,6 +32,12 @@ MiBeeCam is an open-source smart camera firmware for the **LuatOS ESP32-S3-A10**
 - 🚨 **Motion detection** with automatic image upload
 - ⚙️ **NVS-persisted settings** managed via browser or REST API
 - 📊 **Prometheus-compatible metrics** for health monitoring
+- 📶 **WiFi scan** for network discovery
+- 🔄 **WebSocket event push** for real-time UI updates
+- 🔗 **Webhook client** for external event forwarding
+- 🌐 **mDNS** access via `http://mibee.local`
+- 📡 **ONVIF Profile S** discovery + SOAP service
+- 🔀 **Backup SSID** auto-fallback
 
 No cloud dependencies. No subscription. Just a WiFi camera that works on your LAN.
 
@@ -45,6 +51,11 @@ No cloud dependencies. No subscription. Just a WiFi camera that works on your LA
 | 🌐 | **WiFi Management** | STA mode with auto-reconnect, AP hotspot fallback for first-time setup |
 | 🎨 | **Web Interface** | Dashboard, live MJPEG preview, and configuration pages served from SPIFFS |
 | 📺 | **MJPEG Streaming** | Real-time video at up to 15 FPS via `/stream` endpoint, up to 2 concurrent clients |
+| 🌐 | **mDNS Discovery** | Access device via `http://mibee.local`, configurable hostname, _http._tcp service advertisement |
+| 📶 | **WiFi Scan** | Scan nearby networks via REST API and setup wizard |
+| 🔄 | **WebSocket Push** | Real-time event push to web UI, 9 event types, max 5 clients |
+| 🔗 | **Webhook Client** | Forward events to external HTTP endpoint, JSON payload, queue-based async send |
+| 🔀 | **Backup SSID** | Auto-fallback to secondary WiFi on primary failure (3 retries) |
 
 <p align="center">
   <img src="docs/images/index-dashboard.png" alt="MiBeeCam Dashboard" width="640">
@@ -58,6 +69,9 @@ No cloud dependencies. No subscription. Just a WiFi camera that works on your LA
 | ❤️ | **Health Monitoring** | Prometheus-compatible `/metrics` endpoint, 60 s collection interval |
 | 💡 | **Status LED** | GPIO 10 LED indicates startup / WiFi connecting / running / error / AP mode |
 | 🕐 | **Time Sync** | NTP via `pool.ntp.org`, configurable timezone with POSIX format |
+| 📡 | **ONVIF Profile S** | WS-Discovery + SOAP device/media service (default disabled) |
+| 🔄 | **Event Bus** | In-memory pub/sub for inter-module communication, 9 event types |
+| 🖼️ | **Frame Broadcaster** | DRAM frame cache with reference counting (motion + stream) |
 
 ---
 
@@ -197,6 +211,10 @@ luatos-esp32s3-a10-camera/
 | GET | `/api/config` | JSON current configuration (password masked) |
 | POST | `/api/config` | Partial JSON update |
 | POST | `/api/reboot` | Reboot device |
+| GET | `/api/wifi/scan` | WiFi network scan results (JSON) |
+| WS | `/ws` | WebSocket endpoint for real-time event push |
+| POST | `/onvif/device_service` | ONVIF device SOAP service |
+| POST | `/onvif/media_service` | ONVIF media SOAP service |
 
 ### Examples
 
@@ -212,6 +230,16 @@ curl -X POST http://192.168.1.100/api/config \
 # Reboot the device
 curl -X POST http://192.168.1.100/api/reboot
 ```
+
+### WebSocket Example
+```javascript
+const ws = new WebSocket('ws://192.168.1.100/ws');
+ws.onmessage = (e) => {
+    const evt = JSON.parse(e.data);
+    console.log('Event:', evt.type, 'at', evt.timestamp);
+};
+```
+
 
 ---
 

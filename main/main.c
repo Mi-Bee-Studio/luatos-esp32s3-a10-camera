@@ -21,6 +21,12 @@
 #include "time_sync.h"
 #include "health_monitor.h"
 #include "motion_detect.h"
+#include "event_bus.h"
+#include "frame_broadcaster.h"
+#include "webhook.h"
+#include "onvif_discovery.h"
+#include "onvif_service.h"
+#include "esp_http_server.h"
 
 static const char *TAG = "main";
 
@@ -79,6 +85,50 @@ static void wifi_state_cb(wifi_state_t state, void *user_data)
                 ESP_LOGE(TAG, "Motion detection start failed: %s", esp_err_to_name(ret));
             }
         }
+
+#ifdef CONFIG_MIBEECAM_ENABLE_WEBHOOK
+        /* Step 13.5: Webhook init (conditional on config URL) */
+        {
+            const cam_config_t *cfg = config_get();
+            if (cfg->webhook_url[0] != '\0') {
+                esp_err_t wh_ret = webhook_init();
+                if (wh_ret != ESP_OK) {
+                    ESP_LOGW(TAG, "Webhook init failed: %s (continuing)", esp_err_to_name(wh_ret));
+                } else {
+                    ESP_LOGI(TAG, "[13.5/14] Webhook initialized (URL: %s)", cfg->webhook_url);
+                }
+            } else {
+                ESP_LOGI(TAG, "Webhook disabled (no URL configured)");
+            }
+        }
+#endif
+
+#ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
+        /* Step 13.7: ONVIF conditional start */
+        {
+            const cam_config_t *cfg = config_get();
+            if (cfg->onvif_enabled) {
+                esp_err_t onvif_ret = onvif_discovery_start();
+                if (onvif_ret != ESP_OK) {
+                    ESP_LOGW(TAG, "ONVIF discovery start failed: %s (continuing)", esp_err_to_name(onvif_ret));
+                } else {
+                    httpd_handle_t server = web_server_get_handle();
+                    if (server != NULL) {
+                        onvif_ret = onvif_service_start(server);
+                        if (onvif_ret != ESP_OK) {
+                            ESP_LOGW(TAG, "ONVIF service start failed: %s", esp_err_to_name(onvif_ret));
+                        } else {
+                            ESP_LOGI(TAG, "[13.7/14] ONVIF started (discovery + SOAP service)");
+                        }
+                    } else {
+                        ESP_LOGW(TAG, "ONVIF service skipped (web server handle not available)");
+                    }
+                }
+            } else {
+                ESP_LOGI(TAG, "ONVIF disabled (config onvif_enabled=0)");
+            }
+        }
+#endif
 
         /* System is fully up */
         led_set_status(LED_RUNNING);
@@ -158,6 +208,14 @@ void app_main(void)
     led_set_status(LED_STARTING);
     ESP_LOGI(TAG, "[3/14] LED initialized");
 
+    /* Step 3.5: Event bus init (needed before any module that publishes/subscribes) */
+    ret = event_bus_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Event bus init failed: %s (continuing)", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "[3.5/14] Event bus initialized");
+    }
+
     /* Step 4: SPIFFS mount */
     esp_vfs_spiffs_conf_t spiffs_conf = {
         .base_path = "/spiffs",
@@ -184,6 +242,16 @@ void app_main(void)
         } else {
             ESP_LOGI(TAG, "[5/14] Camera initialized (%s, %d fps, quality %d)",
                      camera_get_sensor_name(), cam_cfg->fps, cam_cfg->jpeg_quality);
+        }
+    }
+
+    /* Step 5.5: Frame broadcaster init (provides frame cache for motion/stream) */
+    {
+        esp_err_t fb_ret = fbroadcast_init();
+        if (fb_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Frame broadcaster init failed: %s (continuing)", esp_err_to_name(fb_ret));
+        } else {
+            ESP_LOGI(TAG, "[5.5/14] Frame broadcaster initialized");
         }
     }
 
@@ -264,6 +332,29 @@ void app_main(void)
         } else {
             ESP_LOGE(TAG, "Web server start failed: %s", esp_err_to_name(ret));
         }
+
+#ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
+        /* Step 13.7: ONVIF conditional start (AP mode) */
+        {
+            const cam_config_t *cfg = config_get();
+            if (cfg->onvif_enabled) {
+                esp_err_t onvif_ret = onvif_discovery_start();
+                if (onvif_ret != ESP_OK) {
+                    ESP_LOGW(TAG, "ONVIF discovery start failed: %s (continuing)", esp_err_to_name(onvif_ret));
+                } else {
+                    httpd_handle_t server = web_server_get_handle();
+                    if (server != NULL) {
+                        onvif_ret = onvif_service_start(server);
+                        if (onvif_ret != ESP_OK) {
+                            ESP_LOGW(TAG, "ONVIF service start failed: %s", esp_err_to_name(onvif_ret));
+                        } else {
+                            ESP_LOGI(TAG, "[13.7/14] ONVIF started (AP mode, discovery + SOAP)");
+                        }
+                    }
+                }
+            }
+        }
+#endif
 
         /* In AP mode: camera available for capture/preview but no motion, no time sync, no health.
          * Config web server + /stream and /capture endpoints for preview. */
