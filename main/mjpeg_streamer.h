@@ -1,38 +1,48 @@
 /**
  * @file mjpeg_streamer.h
- * @brief MJPEG real-time video streaming over HTTP.
+ * @brief MJPEG real-time video streaming — independent TCP server (port 81).
  *
- * Provides a multipart/x-mixed-replace MJPEG stream handler
- * for esp_http_server. Supports up to 2 concurrent clients.
+ * Separate listen + per-client FreeRTOS tasks bypass the single-threaded
+ * httpd entirely. The main web server on port 80 stays responsive even
+ * when stream clients are connected for hours.
+ *
+ * Architecture:
+ *   mjpeg_streamer_init()
+ *   mjpeg_streamer_start() — TCP listen on port 81, spawn listen task (Core 1)
+ *     accept() → per-client task (Core 1) → multipart/x-mixed-replace stream
+ *   mjpeg_streamer_stop()  — close all connections, stop listen task
  */
 
 #pragma once
 
 #include "esp_err.h"
-#include "esp_http_server.h"
 
 /**
- * @brief Initialize the MJPEG streamer.
+ * @brief Initialize the MJPEG streamer module.
  *
  * Creates internal mutex and resets client count.
- * Must be called once before registering the URI handler.
+ * Must be called once before mjpeg_streamer_start().
  *
  * @return ESP_OK on success, ESP_ERR_NO_MEM if mutex creation fails.
  */
 esp_err_t mjpeg_streamer_init(void);
 
 /**
- * @brief Register the /stream URI handler on the given HTTP server.
+ * @brief Start the MJPEG TCP server on port 81.
  *
- * @param server  HTTP server handle (must not be NULL).
- * @return ESP_OK on success, ESP_ERR_INVALID_ARG if server is NULL.
+ * Creates a TCP listen socket, binds to port 81, and spawns a listen task
+ * on Core 1. Accepted connections get a dedicated client task (max 2).
+ * Streams multipart/x-mixed-replace MJPEG via raw TCP (no httpd dependency).
+ *
+ * @return ESP_OK on success.
  */
-esp_err_t mjpeg_streamer_register(httpd_handle_t server);
+esp_err_t mjpeg_streamer_start(void);
 
 /**
- * @brief Stop all active streams and release resources.
+ * @brief Stop the MJPEG streamer and close all connections.
  *
- * Safe to call multiple times.
+ * Closes the listen socket and all active client sockets. Listen and
+ * client tasks clean up and exit. Safe to call multiple times.
  */
 void mjpeg_streamer_stop(void);
 
@@ -42,15 +52,3 @@ void mjpeg_streamer_stop(void);
  * @return Client count (0 .. MAX_STREAM_CLIENTS).
  */
 int mjpeg_streamer_get_client_count(void);
-
-/**
- * @brief HTTP handler for GET /stream.
- *
- * Sends a multipart/x-mixed-replace MJPEG stream until the
- * client disconnects or capture fails.  Returns 503 if
- * MAX_STREAM_CLIENTS are already connected.
- *
- * @param req  HTTP request object.
- * @return ESP_OK on normal stream end, ESP_FAIL on errors.
- */
-esp_err_t mjpeg_streamer_http_handler(httpd_req_t *req);

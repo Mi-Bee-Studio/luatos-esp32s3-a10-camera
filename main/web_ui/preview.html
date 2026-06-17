@@ -61,7 +61,7 @@ function startStream(){
   img.onerror=function(){
     if(connected){connected=false;setStatus('off','连接断开');scheduleReconnect()}
   };
-  img.src='/stream?t='+Date.now()
+  img.src='http://'+location.hostname+':81/stream?t='+Date.now()
 }
 
 function stopStream(){
