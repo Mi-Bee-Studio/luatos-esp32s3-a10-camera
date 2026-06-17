@@ -9,6 +9,8 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "config_manager";
 static const char *NVS_NAMESPACE = "device_cfg";
@@ -43,6 +45,9 @@ typedef struct {
 
 // 全局配置实例
 static cam_config_t s_config = {0};
+
+// 配置访问互斥锁（保护多任务并发读写）
+static SemaphoreHandle_t s_config_mutex = NULL;
 
 // 默认配置
 static const cam_config_t s_default_config = {
@@ -229,6 +234,13 @@ esp_err_t config_init(void)
         return ret;
     }
 
+    /* 创建配置互斥锁 */
+    s_config_mutex = xSemaphoreCreateMutex();
+    if (s_config_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create config mutex");
+        return ESP_ERR_NO_MEM;
+    }
+
     // 尝试加载 v3 配置
     memset(&s_config, 0, sizeof(s_config));
     ret = config_read_blob(&s_config, sizeof(cam_config_t), NULL);
@@ -332,8 +344,14 @@ esp_err_t config_save(const cam_config_t *config)
 
     nvs_close(handle);
 
-    // 更新全局配置
+    /* 更新全局配置（在互斥锁保护下） */
+    if (s_config_mutex) {
+        xSemaphoreTake(s_config_mutex, portMAX_DELAY);
+    }
     memcpy(&s_config, config, sizeof(cam_config_t));
+    if (s_config_mutex) {
+        xSemaphoreGive(s_config_mutex);
+    }
 
     ESP_LOGI(TAG, "Config saved successfully");
     return ESP_OK;
@@ -436,4 +454,16 @@ esp_err_t config_set(const cam_config_t *config)
 const char* config_get_timezone(void)
 {
     return s_config.timezone;
+}
+
+void config_get_copy(cam_config_t *out)
+{
+    if (out == NULL) return;
+    if (s_config_mutex) {
+        xSemaphoreTake(s_config_mutex, portMAX_DELAY);
+    }
+    memcpy(out, &s_config, sizeof(cam_config_t));
+    if (s_config_mutex) {
+        xSemaphoreGive(s_config_mutex);
+    }
 }
