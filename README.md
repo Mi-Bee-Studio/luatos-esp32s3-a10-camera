@@ -51,7 +51,7 @@ No cloud dependencies. No subscription. Just a WiFi camera that works on your LA
 | 📷 | **Camera Capture** | OV2640 sensor (8225N), default VGA (640×480), supports SVGA/XGA/UXGA, JPEG output |
 | 🌐 | **WiFi Management** | STA mode with auto-reconnect, AP hotspot fallback for first-time setup |
 | 🎨 | **Web Interface** | Dashboard, live MJPEG preview, and configuration pages served from SPIFFS |
-| 📺 | **MJPEG Streaming** | Real-time video at up to 15 FPS via `/stream` endpoint, up to 2 concurrent clients |
+| 📺 | **MJPEG Streaming** | Real-time video at up to 15 FPS via independent TCP server (port 81), up to 2 concurrent clients |
 | 🌐 | **mDNS Discovery** | Access device via `http://mibee.local`, configurable hostname, _http._tcp service advertisement |
 | 📶 | **WiFi Scan** | Scan nearby networks via REST API and setup wizard |
 | 🔄 | **WebSocket Push** | Real-time event push to web UI, 9 event types, max 5 clients |
@@ -214,7 +214,7 @@ luatos-esp32s3-a10-camera/
 | GET | `/` | Dashboard (SPIFFS index.html) |
 | GET | `/preview.html` | Live MJPEG preview |
 | GET | `/config.html` | Configuration page |
-| GET | `/stream` | MJPEG video stream (multipart/x-mixed-replace) |
+| GET | `:81/stream` | MJPEG video stream (independent TCP server, multipart/x-mixed-replace) |
 | GET | `/capture` | Single JPEG capture + upload |
 | GET | `/api/status` | JSON system status (WiFi, camera, uptime, chip temp) |
 | GET | `/api/config` | JSON current configuration (password masked) |
@@ -312,7 +312,7 @@ Detailed steps:
 | Camera init fails | Wrong pin mapping | Verify 8225N module pins match `camera_driver.c` |
 | Boot loop | PSRAM timing failure | PSRAM must stay disabled in `sdkconfig` |
 | WiFi won't connect | 5 GHz network | ESP32-S3 only supports 2.4 GHz |
-| `/stream` returns 404 | Wildcard URI handler intercepts | Register `/stream` before `/*` handler |
+| Preview shows no video | Stream moved to port 81 | Ensure preview.html uses `http://host:81/stream` |
 | SPIFFS mount fails | Partition mismatch | Ensure SPIFFS offset (0x392000) matches `partitions.csv` |
 | Web UI shows garbled text | Unicode escapes in HTML | Replace `\uXXXX` with actual UTF-8 characters |
 | False motion triggers | Threshold too low | Increase motion threshold in web UI config |
