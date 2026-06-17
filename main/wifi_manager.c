@@ -111,7 +111,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         case WIFI_EVENT_STA_START:
             ESP_LOGI(TAG, "STA started, connecting...");
             set_state(WIFI_STATE_STA_CONNECTING);
-            esp_wifi_connect();
+            // Do NOT call esp_wifi_connect() here — wifi_start_sta() already called it
             break;
 
         case WIFI_EVENT_STA_CONNECTED:
@@ -243,11 +243,6 @@ esp_err_t wifi_init(void)
         return ret;
     }
 
-    // Disable power save to avoid missing EAPOL/auth frames
-    ret = esp_wifi_set_ps(WIFI_PS_NONE);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to disable WiFi power save: %s", esp_err_to_name(ret));
-    }
 
     // Set country code for regulatory compliance
     ret = esp_wifi_set_country_code("CN", false);
@@ -358,22 +353,13 @@ esp_err_t wifi_start_sta(const char *ssid, const char *pass)
 
     esp_err_t ret;
 
-    wifi_config_t wifi_config = {
-.sta = {
-.ssid = "",
-.password = "",
-.scan_method = WIFI_ALL_CHANNEL_SCAN,
-.threshold.rssi = -127,
-.threshold.authmode = WIFI_AUTH_WPA2_PSK,
-.pmf_cfg.capable = true,
-.pmf_cfg.required = false,
-.sae_pwe_h2e = WPA3_SAE_PWE_BOTH,
-.listen_interval = 10,
-        },
-    };
-
+    wifi_config_t wifi_config = {0};  // zero-init ALL fields
     strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
     strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;  // auto-negotiate any auth mode
+    wifi_config.sta.pmf_cfg.capable = true;
+    wifi_config.sta.pmf_cfg.required = false;
+    wifi_config.sta.listen_interval = 3;  // lower = better multicast, less likely rejected
 
     ret = esp_wifi_stop();
     if (ret != ESP_OK && ret != ESP_ERR_WIFI_NOT_STARTED) {
@@ -391,20 +377,21 @@ esp_err_t wifi_start_sta(const char *ssid, const char *pass)
         ESP_LOGE(TAG, "Failed to set STA config: %s", esp_err_to_name(ret));
         return ret;
     }
-    // Configure radio after mode/config set but before wifi_start
-    ret = esp_wifi_set_country_code("CN", false);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to set country code: %s", esp_err_to_name(ret));
+    /* Set DHCP hostname so router shows device name instead of "espressif" */
+    const char *dev_name = config_get()->device_name;
+    if (dev_name && dev_name[0]) {
+        esp_netif_set_hostname(s_sta_netif, dev_name);
     }
-    ret = esp_wifi_set_ps(WIFI_PS_NONE);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to disable PS: %s", esp_err_to_name(ret));
-    }
-
     ret = esp_wifi_start();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start STA: %s", esp_err_to_name(ret));
         return ret;
+    }
+
+    // Disable power save to avoid missing EAPOL/auth frames
+    ret = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to disable PS: %s", esp_err_to_name(ret));
     }
 
     // Boost TX power to 15 dBm (same as working seeed-esp32s3-cam)
