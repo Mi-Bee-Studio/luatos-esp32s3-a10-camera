@@ -88,6 +88,8 @@ verify_hardware.bat
 # Internal development files
 # --------------------------------------------
 .sisyphus/
+.omo/
+package-lock.json
 .trae/
 AGENTS.md
 tmp/
