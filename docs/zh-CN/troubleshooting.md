@@ -47,7 +47,7 @@ E (32) boot: PSRAM disabled due to critical failure
 **解决方案**:
 ```bash
 # 使用 ESP-IDF v5.5.4
-source /home/mickey/.espressif/v5.5.4/esp-idf/export.sh
+source $HOME/.espressif/v5.5.4/esp-idf/export.sh
 ```
 
 **验证方法**:
@@ -284,16 +284,43 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_DEFAULT_LEVEL=3
 ```
 
-**修复 3（辅助）：提升发射功率**
+**修复 3（关键修复）：必须在 wifi_start 之后设置省电模式**
+```c
+// 错误——静默忽略，省电模式保持开启，EAPOL 帧丢失：
+esp_wifi_set_ps(WIFI_PS_NONE);  // 在 start 之前调用
+esp_wifi_start();
+
+// 正确：
+esp_wifi_start();
+esp_wifi_set_ps(WIFI_PS_NONE);  // 在 start 之后调用——生效
+```
+这是连接失败的根本原因。在 `esp_wifi_start()` 之前调用 `esp_wifi_set_ps()` 会被静默忽略。
+
+**修复 4：WiFi STA 配置必须匹配工作配置**
+```c
+wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;  // 自动协商（不要用 WPA2_PSK）
+wifi_config.sta.pmf_cfg.capable = true;
+wifi_config.sta.pmf_cfg.required = false;
+wifi_config.sta.listen_interval = 3;  // 越低越好（不要用 10）
+// scan_method 默认为 FAST_SCAN（不要设置 ALL_CHANNEL_SCAN）
+```
+
+**修复 5：DHCP 主机名**
+```c
+// 在 esp_wifi_start() 之前设置主机名，路由器会显示设备名称：
+esp_netif_set_hostname(s_sta_netif, config_get()->device_name);
+```
+
+**修复 6：不要重复调用 esp_wifi_connect()**
+WIFI_EVENT_STA_START 处理程序中不得调用 `esp_wifi_connect()`。仅在 `wifi_start_sta()` 中、`esp_wifi_set_ps()` 之后调用一次。重复调用会导致竞态条件。
+
+**修复 7（辅助）：提升发射功率**
 提升 TX 功率到 15 dBm，增强连接稳定性：
 ```c
 ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(15));
 ```
 
-**修复 4（辅助）：直接调用 `esp_wifi_connect()`**
-在 `esp_wifi_start()` 后立即调用 `esp_wifi_connect()`，而不是仅依赖 `WIFI_EVENT_STA_START` 事件处理链，减少竞态条件。
-
-**修复 5（辅助）：延迟执行状态回调**
+**修复 8（辅助）：延迟执行状态回调**
 WiFi 状态回调中会调用 `time_sync_init()`、`web_server_start()`、`motion_detect_start()` 等重量级初始化。通过事件循环延迟执行，避免占用 WiFi 任务栈空间：
 ```c
 // 不要直接调用 s_callback()，而是投递到事件循环
@@ -301,11 +328,12 @@ esp_event_post(WIFI_MANAGER_EVENTS, (int32_t)new_state, NULL, 0, portMAX_DELAY);
 ```
 
 **成功的连接流程**：
-1. `init -> auth` — 驱动跳过 SAE（AMPDU 关闭的代码路径），使用 Open System 认证
-2. `auth -> assoc` — 发送关联请求
-3. `assoc -> run` — 连接建立（日志级别 INFO，不会栈溢出）
+1. `esp_wifi_stop()` → `set_mode(STA)` → `set_config()` → `set_hostname()` → `esp_wifi_start()`
+2. `esp_wifi_set_ps(WIFI_PS_NONE)` → `set_max_tx_power(15)` → `esp_wifi_connect()`
+3. `init → auth → assoc → run`（无 SAE 卡死，无栈溢出）
 4. `got IP` — DHCP 完成，回调在事件循环任务中执行（4096 字节栈）
 
+> **间歇性行为**：首次连接可能失败（原因码 205，HANDSHAKE_TIMEOUT）。重试机制（非阻塞，10 秒间隔）会在第二次尝试时连接成功。这是正常现象——WPA2 四次握手偶尔需要重试。
 **验证方法**：
 ```bash
 curl http://<设备IP>/api/status
@@ -493,7 +521,7 @@ printf("Min heap: %d bytes\n", esp_get_minimum_free_heap_size());
 **验证方法**:
 ```bash
 # 1. 服务端测试流吞吐量
-curl -s --max-time 5 http://192.168.61.173/stream -o /dev/null -w 'Bytes: %{size_download}\nRate: %{speed_download} B/s\n'
+curl -s --max-time 5 http://192.168.1.100/stream -o /dev/null -w 'Bytes: %{size_download}\nRate: %{speed_download} B/s\n'
 
 # 2. 浏览器像素变化检测（在浏览器控制台执行）
 var c=document.createElement('canvas');c.width=40;c.height=30;
