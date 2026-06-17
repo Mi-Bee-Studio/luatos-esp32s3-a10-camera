@@ -451,3 +451,49 @@ esp_err_t wifi_manager_deinit(void)
     ESP_LOGI(TAG, "WiFi manager deinitialized");
     return ESP_OK;
 }
+
+#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
+esp_err_t wifi_scan(wifi_ap_record_t *results, uint16_t max_count, uint16_t *found_count)
+{
+    if (results == NULL || found_count == NULL || max_count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *found_count = 0;
+
+    // Configure scan: active, 100ms per channel
+    wifi_scan_config_t scan_config = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0,  // all channels
+        .show_hidden = false,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+    };
+    scan_config.scan_time.active.min = 0;
+    scan_config.scan_time.active.max = 100;  // 100ms per channel
+
+    esp_err_t ret = esp_wifi_scan_start(&scan_config, true);  // blocking
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "wifi_scan_start failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    uint16_t ap_count = 0;
+    ret = esp_wifi_scan_get_ap_num(&ap_count);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    if (ap_count > max_count) {
+        ap_count = max_count;
+    }
+
+    ret = esp_wifi_scan_get_ap_records(&ap_count, results);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    *found_count = ap_count;
+    ESP_LOGI(TAG, "WiFi scan found %d networks", ap_count);
+    return ESP_OK;
+}
+#endif // CONFIG_MIBEECAM_ENABLE_WIFI_SCAN

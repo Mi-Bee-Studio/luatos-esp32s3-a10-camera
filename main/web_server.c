@@ -385,6 +385,48 @@ static esp_err_t handler_api_reboot(httpd_req_t *req)
     return ESP_OK;
 }
 
+#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
+static esp_err_t handler_api_wifi_scan(httpd_req_t *req)
+{
+    // Allocate scan results (max 20 networks)
+    #define MAX_SCAN_RESULTS 20
+    wifi_ap_record_t ap_records[MAX_SCAN_RESULTS];
+    uint16_t found = 0;
+
+    esp_err_t ret = wifi_scan(ap_records, MAX_SCAN_RESULTS, &found);
+    if (ret != ESP_OK) {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "error", "scan_failed");
+        cJSON_AddStringToObject(err, "detail", esp_err_to_name(ret));
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return json_ok(req, err);
+    }
+
+    // Sort by RSSI descending (simple bubble sort for small arrays)
+    for (int i = 0; i < found - 1; i++) {
+        for (int j = i + 1; j < found; j++) {
+            if (ap_records[j].rssi > ap_records[i].rssi) {
+                wifi_ap_record_t tmp = ap_records[i];
+                ap_records[i] = ap_records[j];
+                ap_records[j] = tmp;
+            }
+        }
+    }
+
+    // Build JSON array (no BSSID for privacy)
+    cJSON *root = cJSON_CreateArray();
+    for (int i = 0; i < found; i++) {
+        cJSON *net = cJSON_CreateObject();
+        cJSON_AddStringToObject(net, "ssid", (char *)ap_records[i].ssid);
+        cJSON_AddNumberToObject(net, "rssi", ap_records[i].rssi);
+        cJSON_AddNumberToObject(net, "auth", ap_records[i].authmode);
+        cJSON_AddNumberToObject(net, "channel", ap_records[i].primary);
+        cJSON_AddItemToArray(root, net);
+    }
+    return json_ok(req, root);
+}
+#endif
+
 /* ------------------------------------------------------------------ */
 /*  GET /metrics  (Prometheus format)                                  */
 /* ------------------------------------------------------------------ */
@@ -612,6 +654,15 @@ esp_err_t web_server_start(uint16_t port)
         .handler  = handler_capture,
         .user_ctx = NULL,
     };
+#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
+    const httpd_uri_t api_wifi_scan = {
+        .uri      = "/api/wifi/scan",
+        .method   = HTTP_GET,
+        .handler  = handler_api_wifi_scan,
+        .user_ctx = NULL,
+    };
+#endif
+
     const httpd_uri_t options_any = {
         .uri      = "/*",
         .method   = HTTP_OPTIONS,
@@ -632,6 +683,9 @@ esp_err_t web_server_start(uint16_t port)
     httpd_register_uri_handler(s_server, &api_reboot);
     httpd_register_uri_handler(s_server, &metrics);
     httpd_register_uri_handler(s_server, &capture);
+#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
+    httpd_register_uri_handler(s_server, &api_wifi_scan);
+#endif
     /* Register MJPEG stream handler BEFORE wildcard to avoid interception */
     mjpeg_streamer_register(s_server);
 

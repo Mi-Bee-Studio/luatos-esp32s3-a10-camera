@@ -7,6 +7,7 @@
 #define WIFI_MANAGER_H
 
 #include "esp_err.h"
+#include "esp_wifi.h"
 
 // WiFi states
 typedef enum {
@@ -78,4 +79,17 @@ esp_err_t wifi_manager_deinit(void);
  */
 esp_err_t wifi_stop_retry(void);
 
+#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
+/**
+ * @brief Scan for nearby WiFi networks
+ * @param results     Output array of wifi_ap_record_t (caller allocates)
+ * @param max_count   Maximum number of results to return
+ * @param found_count Output: actual number of networks found
+ * @return ESP_OK on success, error code on failure
+ *
+ * NOTE: This function takes ~1-2 seconds (active scan). It is safe to call
+ * in STA-connected, AP, or connecting states. The scan is synchronous.
+ */
+esp_err_t wifi_scan(wifi_ap_record_t *results, uint16_t max_count, uint16_t *found_count);
+#endif // CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
 #endif // WIFI_MANAGER_H
