@@ -38,6 +38,7 @@ MiBeeCam is an open-source smart camera firmware for the **LuatOS ESP32-S3-A10**
 - 🌐 **mDNS** access via `http://mibee.local`
 - 📡 **ONVIF Profile S** discovery + SOAP service
 - 🔀 **Backup SSID** auto-fallback
+- 💻 **AT command interface** for headless WiFi configuration
 
 No cloud dependencies. No subscription. Just a WiFi camera that works on your LAN.
 
@@ -72,6 +73,7 @@ No cloud dependencies. No subscription. Just a WiFi camera that works on your LA
 | 📡 | **ONVIF Profile S** | WS-Discovery + SOAP device/media service (default disabled) |
 | 🔄 | **Event Bus** | In-memory pub/sub for inter-module communication, 9 event types |
 | 🖼️ | **Frame Broadcaster** | DRAM frame cache with reference counting (motion + stream) |
+| 💻 | **AT Commands** | UART0 serial AT command interface, 20 commands for WiFi config, system info, camera control |
 
 ---
 
@@ -131,15 +133,21 @@ Hold the **BOOT** button (GPIO 0) for **5 seconds**. This clears NVS config and 
 ```
 luatos-esp32s3-a10-camera/
 ├── main/
-│   ├── main.c              # System entry, 14-step startup sequence
+│   ├── main.c              # System entry, 15-step startup sequence
+│   ├── at_command.c/h      # UART0 AT command interface (20 commands)
 │   ├── camera_driver.c/h   # OV2640 init, frame capture, resolution control
 │   ├── config_manager.c/h  # NVS config storage, v1→v2 auto-migration
+│   ├── event_bus.c/h       # In-memory pub/sub for inter-module communication
+│   ├── frame_broadcaster.c/h # DRAM frame cache with reference counting
 │   ├── health_monitor.c/h  # Heap/task monitoring, Prometheus metrics
 │   ├── mjpeg_streamer.c/h  # MJPEG multipart/x-mixed-replace stream
 │   ├── motion_detect.c/h   # Frame-difference detection + upload
+│   ├── onvif_discovery.c/h # WS-Discovery (conditional compile)
+│   ├── onvif_service.c/h   # SOAP device/media service
 │   ├── status_led.c/h      # GPIO 10 LED status indicator
 │   ├── time_sync.c/h       # NTP time synchronization
 │   ├── web_server.c/h      # HTTP server (port 80), REST API, SPIFFS
+│   ├── webhook.c/h         # HTTP event forwarding (conditional compile)
 │   ├── wifi_manager.c/h    # WiFi STA/AP management
 │   ├── cJSON.c/h           # JSON parser
 │   └── web_ui/             # SPIFFS static files
@@ -151,8 +159,9 @@ luatos-esp32s3-a10-camera/
 ├── CMakeLists.txt
 ├── sdkconfig.defaults
 ├── partitions.csv
-└── docs/                   # Bilingual documentation (en/ + zh-CN/)
-```
+└── docs/
+    ├── en/                 # English documentation
+    └── zh-CN/              # Chinese documentation
 
 ---
 
@@ -261,14 +270,14 @@ All settings are stored in NVS and managed via the web UI or REST API:
 
 ## 🔄 Boot Sequence
 
-The firmware follows a carefully ordered 14-step initialization:
+The firmware follows a carefully ordered 15-step initialization:
 
 ```
  NVS Init  →  Config Load  →  LED Init  →  SPIFFS Mount  →  Camera Init
      ↓
  WiFi Init  →  Health Monitor  →  Mode Selection
      ↓
- [STA Mode] WiFi Connect → Streamer → Web Server → NTP → Motion → Button
+ [STA Mode] WiFi Connect → Streamer → Web Server → NTP → Motion → Button → AT Command
  [AP Mode]  Web Server Only
 ```
 
@@ -292,6 +301,7 @@ Detailed steps:
 | 12 | NTP time sync | Time synchronization (STA only) |
 | 13 | Motion detection start | Frame-difference monitoring (STA only) |
 | 14 | BOOT button monitor | 5 s hold = factory reset |
+| 15 | AT command interface | UART0 AT command interface (20 commands) |
 
 ---
 
