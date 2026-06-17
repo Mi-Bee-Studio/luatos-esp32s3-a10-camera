@@ -71,6 +71,34 @@ function loadConfig(){
     for(var j=0;j<TZ_OPTIONS.length;j++){var sel2=d.timezone===TZ_OPTIONS[j][0]?' selected':'';h+='<option value="'+TZ_OPTIONS[j][0]+'"'+sel2+'>'+TZ_OPTIONS[j][1]+'</option>'}
     h+='</select></div>';
     h+='</div>';
+    // WiFi Enhancement
+    h+='<div class="cd"><h3>WiFi 增强</h3>';
+    h+='<div class="fg"><label>备用 SSID</label><input type="text" id="wifi_ssid2" value="'+(d.wifi_ssid2||'')+'" placeholder="可选，连接失败3次后使用"></div>';
+    h+='<div class="fg"><label>备用 WiFi 密码</label><div class="pw-wrap"><input type="password" id="wifi_pass2" value="" placeholder="不修改则留空"><span class="eye" onclick="toggleEye(this)">Show</span></div></div>';
+    h+='<div class="fg"><label>mDNS 主机名</label><input type="text" id="mdns_hostname" value="'+(d.mdns_hostname||'mibee')+'" placeholder="mibee" oninput="validateMdns(this)"></div>';
+    h+='<div style="font-size:11px;color:#9ca3af;margin-top:4px">备用 SSID 在连接主 SSID 失败 3 次后使用</div>';
+    h+='<div style="font-size:11px;color:#9ca3af;margin-top:4px">通过 http://<span id="mdns_preview">'+(d.mdns_hostname||'mibee')+'</span>.local 访问摄像头</div>';
+    h+='</div>';
+    // Webhook
+    h+='<div class="cd"><h3>Webhook</h3>';
+    h+='<div class="fg"><label>Webhook URL</label><input type="text" id="webhook_url" value="'+(d.webhook_url||'')+'" placeholder="http://example.com/webhook" oninput="validateWebhook(this)"></div>';
+    h+='<div class="fg"><label>Webhook 密钥</label><div class="pw-wrap"><input type="password" id="webhook_secret" value="" placeholder="不修改则留空"><span class="eye" onclick="toggleEye(this)">Show</span></div></div>';
+    h+='<div style="font-size:11px;color:#9ca3af;margin-top:4px" id="webhook_hint">事件将以 JSON 格式 POST 到此 URL</div>';
+    h+='</div>';
+    // ONVIF
+    h+='<div class="cd"><h3>ONVIF</h3>';
+    h+='<div class="fg" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="onvif_enabled"'+(d.onvif_enabled==1?' checked':'')+' style="width:auto;margin:0"><label style="margin:0;display:inline">启用 ONVIF 发现协议</label></div>';
+    h+='<div style="font-size:11px;color:#9ca3af;margin-top:4px">允许 NVR 系统通过 ONVIF Profile S 发现此摄像头</div>';
+    h+='</div>';
+    // WebSocket
+    h+='<div class="cd"><h3>实时推送 (WebSocket)</h3>';
+    h+='<div class="fg" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="ws_enabled"'+(d.ws_enabled==1?' checked':'')+' style="width:auto;margin:0"><label style="margin:0;display:inline">启用 WebSocket 实时推送</label></div>';
+    h+='<div style="font-size:11px;color:#9ca3af;margin-top:4px">向连接的 Web 客户端推送实时事件</div>';
+    h+='</div>';
+    // Frame Broadcaster
+    h+='<div class="cd"><h3>帧广播器 (Frame Broadcaster)</h3>';
+    h+='<div style="font-size:11px;color:#6b7280;line-height:1.5;padding:8px 0">帧广播器将摄像头帧分发给多个消费者。此功能为编译时设置，不可运行时配置。</div>';
+    h+='</div>';
     // Buttons
     h+='<div class="btn-row"><button type="submit" class="btn pri">保存配置</button><button type="button" class="btn dan" onclick="factoryReset()">恢复出厂</button><button type="button" class="btn sec" onclick="rebootDevice()">重启设备</button></div>';
     h+='</form>';
@@ -88,9 +116,16 @@ function saveConfig(e){
     jpeg_quality:parseInt(document.getElementById('jpeg_quality').value),
     timezone:document.getElementById('timezone').value,
     motion_threshold:parseInt(document.getElementById('motion_threshold').value),
-    motion_cooldown:parseInt(document.getElementById('motion_cooldown').value)
+    motion_cooldown:parseInt(document.getElementById('motion_cooldown').value),
+    wifi_ssid2:document.getElementById('wifi_ssid2').value,
+    mdns_hostname:document.getElementById('mdns_hostname').value,
+    webhook_url:document.getElementById('webhook_url').value,
+    onvif_enabled:document.getElementById('onvif_enabled').checked?1:0,
+    ws_enabled:document.getElementById('ws_enabled').checked?1:0
   };
   var wp=document.getElementById('wifi_pass').value;if(wp)body.wifi_pass=wp;
+  var wp2=document.getElementById('wifi_pass2').value;if(wp2)body.wifi_pass2=wp2;
+  var ws=document.getElementById('webhook_secret').value;if(ws)body.webhook_secret=ws;
   fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
   .then(function(r){return r.json()}).then(function(d){
     if(d.success){toast('保存成功');setTimeout(loadConfig,1000)}
@@ -112,6 +147,23 @@ function rebootDevice(){
     if(d.success)toast('设备正在重启...');
     else toast(d.message||'操作失败')
   }).catch(function(){toast('操作失败')})
+}
+function validateMdns(el){
+  var v=el.value.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,32);
+  if(v!==el.value)el.value=v;
+  var p=document.getElementById('mdns_preview');
+  if(p)p.textContent=v||'mibee'
+}
+function validateWebhook(el){
+  var v=el.value;
+  var hint=document.getElementById('webhook_hint');
+  if(v&&!v.match(/^https?:\/\//)){
+    hint.textContent='URL 必须以 http:// 或 https:// 开头';
+    hint.style.color='#dc2626'
+  }else{
+    hint.textContent='事件将以 JSON 格式 POST 到此 URL';
+    hint.style.color='#9ca3af'
+  }
 }
 
 </script></body></html>
