@@ -23,6 +23,11 @@
 #include "camera_driver.h"
 #include "config_manager.h"
 #include "mjpeg_streamer.h"
+#ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
+#include "frame_broadcaster.h"
+#endif
+#include "event_bus.h"
+
 
 static const char *TAG = "motion_detect";
 
@@ -36,7 +41,7 @@ static const char *TAG = "motion_detect";
 
 /* Task parameters */
 #define MOTION_TASK_PRIORITY  5
-#define MOTION_TASK_STACK_SIZE 8192
+#define MOTION_TASK_STACK_SIZE 10240
 
 /* Static state */
 static TaskHandle_t s_motion_task_handle = NULL;
@@ -155,16 +160,28 @@ static void motion_detection_task(void *arg)
          * return fb_a immediately, then capture fb_b and compare.
          */
 
-        /* Capture reference frame */
+        /* Capture reference frame (broadcaster or direct) */
         camera_fb_t *fb_a = NULL;
-        if (camera_capture(&fb_a) != ESP_OK || fb_a == NULL) {
-            ESP_LOGW(TAG, "Failed to capture reference frame");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
+        uint8_t *a_buf = NULL;
+        size_t a_len = 0;
+#ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
+        frame_ref_t *ref_a = NULL;
+        if (fbroadcast_acquire_latest(&ref_a) == ESP_OK) {
+            a_buf = ref_a->buf;
+            a_len = ref_a->len;
+        } else
+#endif
+        {
+            if (camera_capture(&fb_a) != ESP_OK || fb_a == NULL) {
+                ESP_LOGW(TAG, "Failed to capture reference frame");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
+            }
+            a_buf = fb_a->buf;
+            a_len = fb_a->len;
         }
 
-        /* Sample bytes from fb_a for later comparison (every SAMPLE_STEP bytes) */
-        size_t a_len = fb_a->len;
+        /* Sample bytes from frame buffer for later comparison (every SAMPLE_STEP bytes) */
         size_t sample_count = (a_len + SAMPLE_STEP - 1) / SAMPLE_STEP;
         uint8_t *samples_a = NULL;
         if (sample_count > 0) {
@@ -178,36 +195,65 @@ static void motion_detection_task(void *arg)
         }
         if (samples_a == NULL) {
             ESP_LOGW(TAG, "Failed to allocate sample buffer (%u bytes)", (unsigned)sample_count);
-            camera_return_fb(fb_a);
+#ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
+            if (ref_a != NULL) {
+                fbroadcast_release(ref_a);
+                ref_a = NULL;
+            } else
+#endif
+            {
+                camera_return_fb(fb_a);
+            }
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
         for (size_t i = 0, j = 0; i < a_len && j < sample_count; i += SAMPLE_STEP, j++) {
-            samples_a[j] = fb_a->buf[i];
+            samples_a[j] = a_buf[i];
         }
 
-        /* Return fb_a IMMEDIATELY — free the frame buffer for other tasks */
-        camera_return_fb(fb_a);
+        /* Return/release frame buffer immediately */
+#ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
+        if (ref_a != NULL) {
+            fbroadcast_release(ref_a);
+            ref_a = NULL;
+        } else
+#endif
+        {
+            camera_return_fb(fb_a);
+        }
         fb_a = NULL;
 
         /* Wait between captures for detectable change */
         vTaskDelay(pdMS_TO_TICKS(500));
 
-        /* Capture comparison frame */
+        /* Capture comparison frame (broadcaster or direct) */
         camera_fb_t *fb_b = NULL;
-        if (camera_capture(&fb_b) != ESP_OK || fb_b == NULL) {
-            ESP_LOGW(TAG, "Failed to capture comparison frame");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
+        uint8_t *b_buf = NULL;
+        size_t b_len = 0;
+#ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
+        frame_ref_t *ref_b = NULL;
+        if (fbroadcast_acquire_latest(&ref_b) == ESP_OK) {
+            b_buf = ref_b->buf;
+            b_len = ref_b->len;
+        } else
+#endif
+        {
+            if (camera_capture(&fb_b) != ESP_OK || fb_b == NULL) {
+                ESP_LOGW(TAG, "Failed to capture comparison frame");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
+            }
+            b_buf = fb_b->buf;
+            b_len = fb_b->len;
         }
 
-        /* Compare saved samples against fb_b */
-        size_t min_len = (a_len < fb_b->len) ? a_len : fb_b->len;
+        /* Compare saved samples against frame B */
+        size_t min_len = (a_len < b_len) ? a_len : b_len;
         size_t total = 0;
         size_t changed = 0;
         for (size_t i = 0, j = 0; i < min_len && j < sample_count; i += SAMPLE_STEP, j++) {
             total++;
-            if (abs((int)samples_a[j] - (int)fb_b->buf[i]) > PIXEL_DELTA) {
+            if (abs((int)samples_a[j] - (int)b_buf[i]) > PIXEL_DELTA) {
                 changed++;
             }
         }
@@ -219,35 +265,80 @@ static void motion_detection_task(void *arg)
                      (unsigned)changed, (unsigned)total, percent, cfg->motion_threshold);
         }
 
-        /* Free fb_b and sample buffer */
-        camera_return_fb(fb_b);
+        /* Free frame B buffer */
+#ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
+        if (ref_b != NULL) {
+            fbroadcast_release(ref_b);
+            ref_b = NULL;
+        } else
+#endif
+        {
+            camera_return_fb(fb_b);
+        }
 
         if (motion) {
             s_consecutive_detections++;
             if (s_consecutive_detections >= REQUIRED_CONSECUTIVE && !s_in_cooldown) {
                 ESP_LOGI(TAG, "Motion detected! (consecutive=%d)", s_consecutive_detections);
 
-                /* Capture a fresh frame for upload */
-                camera_fb_t *fb_upload = NULL;
-                if (camera_capture(&fb_upload) == ESP_OK && fb_upload != NULL) {
-                    /* Copy JPEG data so we can return the framebuffer immediately */
-                    /* Reuse static JPEG buffer to reduce heap fragmentation */
-                    if (s_jpeg_copy == NULL || s_jpeg_copy_size < fb_upload->len) {
-                        free(s_jpeg_copy);
-                        s_jpeg_copy = (uint8_t *)malloc(fb_upload->len);
-                        s_jpeg_copy_size = s_jpeg_copy ? fb_upload->len : 0;
+                /* Publish motion detected event */
+                event_t motion_event = {
+                    .type = EVENT_MOTION_DETECTED,
+                    .timestamp = esp_timer_get_time(),
+                    .payload = NULL,
+                    .payload_len = 0,
+                };
+                event_bus_publish(&motion_event);
+
+                /* Capture a fresh frame for upload (broadcaster or direct) */
+#ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
+                {
+                    frame_ref_t *ref_upload = NULL;
+                    if (fbroadcast_acquire_latest(&ref_upload) == ESP_OK) {
+                        /* Copy JPEG data so we can release the frame immediately */
+                        /* Reuse static JPEG buffer to reduce heap fragmentation */
+                        if (s_jpeg_copy == NULL || s_jpeg_copy_size < ref_upload->len) {
+                            free(s_jpeg_copy);
+                            s_jpeg_copy = (uint8_t *)malloc(ref_upload->len);
+                            s_jpeg_copy_size = s_jpeg_copy ? ref_upload->len : 0;
+                        }
+                        if (s_jpeg_copy != NULL) {
+                            memcpy(s_jpeg_copy, ref_upload->buf, ref_upload->len);
+                            size_t upload_len = ref_upload->len;
+                            fbroadcast_release(ref_upload);  // Unblock broadcaster immediately
+                            upload_with_retry(s_jpeg_copy, upload_len);
+                        } else {
+                            ESP_LOGW(TAG, "Failed to allocate JPEG copy buffer (%u bytes)", (unsigned)ref_upload->len);
+                            fbroadcast_release(ref_upload);
+                        }
+                    } else
+#endif
+                    {
+                        camera_fb_t *fb_upload = NULL;
+                        if (camera_capture(&fb_upload) == ESP_OK && fb_upload != NULL) {
+                            /* Copy JPEG data so we can return the framebuffer immediately */
+                            /* Reuse static JPEG buffer to reduce heap fragmentation */
+                            if (s_jpeg_copy == NULL || s_jpeg_copy_size < fb_upload->len) {
+                                free(s_jpeg_copy);
+                                s_jpeg_copy = (uint8_t *)malloc(fb_upload->len);
+                                s_jpeg_copy_size = s_jpeg_copy ? fb_upload->len : 0;
+                            }
+                            if (s_jpeg_copy != NULL) {
+                                memcpy(s_jpeg_copy, fb_upload->buf, fb_upload->len);
+                                size_t upload_len = fb_upload->len;
+                                camera_return_fb(fb_upload);  // Unblock camera immediately
+                                upload_with_retry(s_jpeg_copy, upload_len);
+                            } else {
+                                ESP_LOGW(TAG, "Failed to allocate JPEG copy buffer (%u bytes)", (unsigned)fb_upload->len);
+                                camera_return_fb(fb_upload);
+                            }
+                        } else {
+                            ESP_LOGW(TAG, "Failed to capture frame for upload");
+                        }
                     }
-                    if (s_jpeg_copy != NULL) {
-                        memcpy(s_jpeg_copy, fb_upload->buf, fb_upload->len);
-                        camera_return_fb(fb_upload);  // Unblock camera immediately
-                        upload_with_retry(s_jpeg_copy, fb_upload->len);
-                    } else {
-                        ESP_LOGW(TAG, "Failed to allocate JPEG copy buffer (%u bytes)", fb_upload->len);
-                        camera_return_fb(fb_upload);
-                    }
-                } else {
-                    ESP_LOGW(TAG, "Failed to capture frame for upload");
+#ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
                 }
+#endif
 
                 /* Enter cooldown */
                 s_in_cooldown = true;
@@ -267,6 +358,15 @@ static void motion_detection_task(void *arg)
             if (elapsed_us >= cooldown_us) {
                 s_in_cooldown = false;
                 ESP_LOGD(TAG, "Cooldown expired");
+
+                /* Publish motion end event */
+                event_t motion_end = {
+                    .type = EVENT_MOTION_END,
+                    .timestamp = esp_timer_get_time(),
+                    .payload = NULL,
+                    .payload_len = 0,
+                };
+                event_bus_publish(&motion_end);
             }
         }
 
