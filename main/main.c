@@ -76,14 +76,25 @@ static void wifi_state_cb(wifi_state_t state, void *user_data)
             }
         }
 
-        /* Start motion detection (once) */
+        /* Start MJPEG streamer (if not already started by camera reinit) */
+        mjpeg_streamer_start();
+
+        /* Start motion detection (only if heap is sufficient — motion detection
+         * competes with MJPEG streaming for camera access and needs ~20KB for
+         * JPEG copy buffers. On PSRAM-less boards, skip when heap is tight.) */
         if (!s_motion_started) {
-            esp_err_t ret = motion_detect_start();
-            if (ret == ESP_OK) {
-                s_motion_started = true;
-                ESP_LOGI(TAG, "Motion detection started");
+            size_t free_heap = esp_get_free_heap_size();
+            if (free_heap < 30000) {
+                ESP_LOGW(TAG, "Motion detection skipped (heap %uB < 30KB threshold — NVR/streaming mode)",
+                         (unsigned)free_heap);
             } else {
-                ESP_LOGE(TAG, "Motion detection start failed: %s", esp_err_to_name(ret));
+                esp_err_t ret = motion_detect_start();
+                if (ret == ESP_OK) {
+                    s_motion_started = true;
+                    ESP_LOGI(TAG, "Motion detection started");
+                } else {
+                    ESP_LOGE(TAG, "Motion detection start failed: %s", esp_err_to_name(ret));
+                }
             }
         }
 
@@ -289,7 +300,7 @@ void app_main(void)
         /* Remaining services (time_sync, web_server, motion) are started
          * by the wifi_state_cb when WIFI_STATE_STA_CONNECTED fires. */
 
-        /* Step 10: MJPEG streamer init (needed before web_server registers it) */
+        /* Step 10: MJPEG streamer init (creates mutex, called before anything else) */
         ret = mjpeg_streamer_init();
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "MJPEG streamer init failed: %s", esp_err_to_name(ret));
@@ -314,7 +325,7 @@ void app_main(void)
         ESP_LOGI(TAG, "  Config page: http://192.168.4.1");
         ESP_LOGI(TAG, "========================================");
 
-        /* Step 10b: MJPEG streamer init (needed before web_server registers /stream) */
+        /* Step 10b: MJPEG streamer init (creates mutex) */
         if (!s_mjpeg_initialized) {
             ret = mjpeg_streamer_init();
             if (ret == ESP_OK) {
@@ -333,6 +344,9 @@ void app_main(void)
         } else {
             ESP_LOGE(TAG, "Web server start failed: %s", esp_err_to_name(ret));
         }
+
+        /* Start MJPEG streamer (TCP server on port 81) */
+        mjpeg_streamer_start();
 
 #ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
         /* Step 13.7: ONVIF conditional start (AP mode) */
