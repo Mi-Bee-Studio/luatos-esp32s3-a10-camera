@@ -55,21 +55,24 @@ static int soap_envelope(char *buf, size_t buf_size, const char *body)
 
 static esp_err_t onvif_device_handler(httpd_req_t *req)
 {
-    /* Read POST body (max 4KB) */
-    char buf[4096];
+    /* Read POST body (max 1KB) */
+    char buf[1024];
     int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (len <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
         return ESP_FAIL;
     }
     buf[len] = '\0';
+    if (len >= (int)sizeof(buf)) {
+        len = sizeof(buf) - 1;
+    }
 
     httpd_resp_set_type(req, "application/soap+xml; charset=utf-8");
 
     const char *ip = wifi_get_ip_str();
 
-    char soap_body[2048];
-    char response[3072];
+    char soap_body[768];
+    char response[1536];
     int n = 0;
 
     if (strstr(buf, "GetDeviceInformation")) {
@@ -83,6 +86,9 @@ static esp_err_t onvif_device_handler(httpd_req_t *req)
             "</tds:GetDeviceInformationResponse>",
             ip);
         n = soap_envelope(response, sizeof(response), soap_body);
+        if (n >= (int)sizeof(response)) {
+            ESP_LOGW(TAG, "ONVIF response truncated");
+        }
         httpd_resp_send(req, response, n);
         return ESP_OK;
     }
@@ -112,6 +118,9 @@ static esp_err_t onvif_device_handler(httpd_req_t *req)
             "</tds:GetCapabilitiesResponse>",
             ip, ip, ip, ip);
         n = soap_envelope(response, sizeof(response), soap_body);
+        if (n >= (int)sizeof(response)) {
+            ESP_LOGW(TAG, "ONVIF response truncated");
+        }
         httpd_resp_send(req, response, n);
         return ESP_OK;
     }
@@ -138,6 +147,9 @@ static esp_err_t onvif_device_handler(httpd_req_t *req)
             "</tds:GetServicesResponse>",
             ip, ip);
         n = soap_envelope(response, sizeof(response), soap_body);
+        if (n >= (int)sizeof(response)) {
+            ESP_LOGW(TAG, "ONVIF response truncated");
+        }
         httpd_resp_send(req, response, n);
         return ESP_OK;
     }
@@ -153,22 +165,25 @@ static esp_err_t onvif_device_handler(httpd_req_t *req)
 
 static esp_err_t onvif_media_handler(httpd_req_t *req)
 {
-    /* Read POST body (max 4KB) */
-    char buf[4096];
+    /* Read POST body (max 1KB) */
+    char buf[1024];
     int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (len <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
         return ESP_FAIL;
     }
     buf[len] = '\0';
+    if (len >= (int)sizeof(buf)) {
+        len = sizeof(buf) - 1;
+    }
 
     httpd_resp_set_type(req, "application/soap+xml; charset=utf-8");
 
     const char *ip = wifi_get_ip_str();
     const cam_config_t *cfg = config_get();
 
-    char soap_body[2048];
-    char response[3072];
+    char soap_body[768];
+    char response[1536];
     int n = 0;
 
     if (strstr(buf, "GetProfiles")) {
@@ -198,6 +213,9 @@ static esp_err_t onvif_media_handler(httpd_req_t *req)
             "</trt:GetProfilesResponse>",
             cfg->device_name);
         n = soap_envelope(response, sizeof(response), soap_body);
+        if (n >= (int)sizeof(response)) {
+            ESP_LOGW(TAG, "ONVIF response truncated");
+        }
         httpd_resp_send(req, response, n);
         return ESP_OK;
     }
@@ -220,6 +238,9 @@ static esp_err_t onvif_media_handler(httpd_req_t *req)
             "</trt:GetStreamUriResponse>",
             ip);
         n = soap_envelope(response, sizeof(response), soap_body);
+        if (n >= (int)sizeof(response)) {
+            ESP_LOGW(TAG, "ONVIF response truncated");
+        }
         httpd_resp_send(req, response, n);
         return ESP_OK;
     }
