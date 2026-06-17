@@ -1,0 +1,52 @@
+menu "MiBeeCam Features"
+
+    config MIBEECAM_ENABLE_WEBHOOK
+        bool "Enable Webhook HTTP client"
+        default y
+        help
+            Enable webhook notification support. When enabled, the device can
+            send HTTP POST requests to a configured URL on motion detection.
+
+    config MIBEECAM_ENABLE_ONVIF
+        bool "Enable ONVIF Profile S (discovery + minimal SOAP)"
+        default y
+        help
+            Enable ONVIF discovery and minimal SOAP service for compatibility
+            with NVR systems that support ONVIF Profile S.
+
+    config MIBEECAM_ENABLE_WS
+        bool "Enable WebSocket push support"
+        default y
+        help
+            Enable WebSocket server for real-time push of events and frames
+            to connected web clients.
+
+    config MIBEECAM_ENABLE_FRAME_BROADCASTER
+        bool "Enable frame broadcaster module"
+        default y
+        help
+            Enable the frame broadcasting subsystem that distributes camera
+            frames to multiple consumers (streamer, motion detection, etc.).
+
+    config MIBEECAM_ENABLE_BACKUP_SSID
+        bool "Enable backup WiFi SSID support"
+        default y
+        help
+            Enable backup/secondary WiFi SSID for failover when the primary
+            WiFi network is unavailable.
+
+    config MIBEECAM_ENABLE_MDNS
+        bool "Enable mDNS hostname advertisement"
+        default y
+        help
+            Enable mDNS service advertisement so the device can be discovered
+            as <hostname>.local on the local network.
+
+    config MIBEECAM_ENABLE_WIFI_SCAN
+        bool "Enable WiFi scan capability"
+        default y
+        help
+            Enable WiFi access point scanning for the web UI configuration
+            page, allowing users to select nearby networks.
+
+endmenu

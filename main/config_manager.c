@@ -24,6 +24,23 @@ typedef struct {
     uint32_t version;
 } device_config_t_v1;
 
+// v2 配置结构体 — 仅用于 NVS 迁移 v2→v3
+typedef struct {
+    char wifi_ssid[33];
+    char wifi_pass[65];
+    char server_url[129];
+    char device_name[33];
+    uint8_t resolution;
+    uint8_t fps;
+    uint8_t jpeg_quality;
+    char web_password[33];
+    char timezone[33];
+    uint8_t motion_threshold;
+    uint8_t motion_cooldown;
+    uint32_t magic;
+    uint32_t version;
+} cam_config_t_v2;
+
 // 全局配置实例
 static cam_config_t s_config = {0};
 
@@ -40,6 +57,14 @@ static const cam_config_t s_default_config = {
     .timezone = CONFIG_DEFAULT_TIMEZONE,
     .motion_threshold = 5,
     .motion_cooldown = 10,
+    // v3 defaults
+    .wifi_ssid2 = "",
+    .wifi_pass2 = "",
+    .mdns_hostname = "mibee",
+    .webhook_url = "",
+    .webhook_secret = "",
+    .onvif_enabled = 0,
+    .ws_enabled = 1,
     .magic = CONFIG_MAGIC,
     .version = CONFIG_VERSION,
 };
@@ -124,6 +149,65 @@ static esp_err_t config_migrate_v1_to_v2(cam_config_t *config)
 }
 
 /**
+ * @brief 尝试从 NVS 加载旧版 v2 配置并迁移到 v3
+ */
+static esp_err_t config_migrate_v2_to_v3(cam_config_t *config)
+{
+    cam_config_t_v2 old_cfg;
+    memset(&old_cfg, 0, sizeof(old_cfg));
+
+    esp_err_t ret = config_read_blob(&old_cfg, sizeof(old_cfg), NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGD(TAG, "No v2 config found for migration");
+        return ret;
+    }
+
+    // 验证 v2 配置有效性
+    if (old_cfg.magic != CONFIG_MAGIC || old_cfg.version != 2) {
+        ESP_LOGW(TAG, "v2 config has invalid magic/version, skipping migration");
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    // 迁移字段
+    memset(config, 0, sizeof(cam_config_t));
+    strncpy(config->wifi_ssid, old_cfg.wifi_ssid, sizeof(config->wifi_ssid) - 1);
+    config->wifi_ssid[sizeof(config->wifi_ssid) - 1] = '\0';
+    strncpy(config->wifi_pass, old_cfg.wifi_pass, sizeof(config->wifi_pass) - 1);
+    config->wifi_pass[sizeof(config->wifi_pass) - 1] = '\0';
+    strncpy(config->server_url, old_cfg.server_url, sizeof(config->server_url) - 1);
+    config->server_url[sizeof(config->server_url) - 1] = '\0';
+    strncpy(config->device_name, old_cfg.device_name, sizeof(config->device_name) - 1);
+    config->device_name[sizeof(config->device_name) - 1] = '\0';
+    config->resolution = old_cfg.resolution;
+    config->fps = old_cfg.fps;
+    config->jpeg_quality = old_cfg.jpeg_quality;
+    strncpy(config->web_password, old_cfg.web_password, sizeof(config->web_password) - 1);
+    config->web_password[sizeof(config->web_password) - 1] = '\0';
+    strncpy(config->timezone, old_cfg.timezone, sizeof(config->timezone) - 1);
+    config->timezone[sizeof(config->timezone) - 1] = '\0';
+    config->motion_threshold = old_cfg.motion_threshold;
+    config->motion_cooldown = old_cfg.motion_cooldown;
+
+    // v3 新字段使用默认值
+    config->wifi_ssid2[0] = '\0';
+    config->wifi_pass2[0] = '\0';
+    strncpy(config->mdns_hostname, "mibee", sizeof(config->mdns_hostname) - 1);
+    config->mdns_hostname[sizeof(config->mdns_hostname) - 1] = '\0';
+    config->webhook_url[0] = '\0';
+    config->webhook_secret[0] = '\0';
+    config->onvif_enabled = 0;
+    config->ws_enabled = 1;
+
+    // 更新版本标记
+    config->magic = CONFIG_MAGIC;
+    config->version = CONFIG_VERSION;
+
+    ESP_LOGI(TAG, "Config migrated from v2 to v3 (ssid=%s, hostname=%s)",
+             config->wifi_ssid, config->mdns_hostname);
+    return ESP_OK;
+}
+
+/**
  * @brief 初始化配置管理系统
  *        初始化 NVS，加载或迁移配置（v1→v2 自动迁移）
  */
@@ -145,28 +229,52 @@ esp_err_t config_init(void)
         return ret;
     }
 
-    // 尝试加载新版 v2 配置
+    // 尝试加载 v3 配置
     memset(&s_config, 0, sizeof(s_config));
     ret = config_read_blob(&s_config, sizeof(cam_config_t), NULL);
 
     if (ret == ESP_OK && s_config.magic == CONFIG_MAGIC && s_config.version == CONFIG_VERSION) {
-        ESP_LOGI(TAG, "Config v2 loaded successfully");
+        ESP_LOGI(TAG, "Config v3 loaded successfully");
         return ESP_OK;
     }
 
-    // v2 加载失败，尝试从 v1 迁移
-    ESP_LOGW(TAG, "v2 config not valid, attempting v1 migration...");
+    // v3 加载失败，尝试从 v2 迁移
+    if (ret == ESP_OK && s_config.magic == CONFIG_MAGIC && s_config.version == 2) {
+        ESP_LOGW(TAG, "v2 config detected, attempting v2\u2192v3 migration...");
+        ret = config_migrate_v2_to_v3(&s_config);
+        if (ret == ESP_OK) {
+            esp_err_t save_ret = config_save(&s_config);
+            if (save_ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to save v2\u2192v3 migrated config: %s", esp_err_to_name(save_ret));
+            }
+            return (save_ret == ESP_OK) ? ESP_OK : save_ret;
+        }
+    }
+
+    // v2 迁移也失败或不存在，尝试从 v1 迁移
+    ESP_LOGW(TAG, "v3 config not valid, attempting v1 migration...");
     ret = config_migrate_v1_to_v2(&s_config);
     if (ret == ESP_OK) {
-        // 迁移成功，保存新格式到 NVS
+        // Set v3 defaults for new fields
+        s_config.wifi_ssid2[0] = '\0';
+        s_config.wifi_pass2[0] = '\0';
+        strncpy(s_config.mdns_hostname, "mibee", sizeof(s_config.mdns_hostname) - 1);
+        s_config.mdns_hostname[sizeof(s_config.mdns_hostname) - 1] = '\0';
+        s_config.webhook_url[0] = '\0';
+        s_config.webhook_secret[0] = '\0';
+        s_config.onvif_enabled = 0;
+        s_config.ws_enabled = 1;
+        s_config.magic = CONFIG_MAGIC;
+        s_config.version = CONFIG_VERSION;
+
         esp_err_t save_ret = config_save(&s_config);
         if (save_ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to save migrated config: %s", esp_err_to_name(save_ret));
         }
-        return save_ret;
+        return (save_ret == ESP_OK) ? ESP_OK : save_ret;
     }
 
-    // v1 迁移也失败，使用默认值
+    // 所有迁移都失败，使用默认值
     ESP_LOGW(TAG, "No valid config found, using defaults");
     config_set_defaults(&s_config);
     return ESP_OK;
@@ -282,6 +390,29 @@ bool config_is_valid(const cam_config_t *config)
     // 检查 JPEG quality 范围
     if (config->jpeg_quality < 1 || config->jpeg_quality > 63) {
         ESP_LOGW(TAG, "Invalid config: jpeg_quality=%u (must be 1-63)", config->jpeg_quality);
+        return false;
+    }
+    // v3 new field: mdns_hostname must not be empty
+    if (config->mdns_hostname[0] == '\0' || strlen(config->mdns_hostname) >= 32) {
+        ESP_LOGW(TAG, "Invalid config: mdns_hostname is empty or too long");
+        return false;
+    }
+
+    // v3 new field: webhook_url length check if non-empty
+    if (config->webhook_url[0] != '\0' && strlen(config->webhook_url) >= 128) {
+        ESP_LOGW(TAG, "Invalid config: webhook_url too long");
+        return false;
+    }
+
+    // v3 new field: onvif_enabled must be 0 or 1
+    if (config->onvif_enabled != 0 && config->onvif_enabled != 1) {
+        ESP_LOGW(TAG, "Invalid config: onvif_enabled=%u (must be 0 or 1)", config->onvif_enabled);
+        return false;
+    }
+
+    // v3 new field: ws_enabled must be 0 or 1
+    if (config->ws_enabled != 0 && config->ws_enabled != 1) {
+        ESP_LOGW(TAG, "Invalid config: ws_enabled=%u (must be 0 or 1)", config->ws_enabled);
         return false;
     }
 

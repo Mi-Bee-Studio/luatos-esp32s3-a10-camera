@@ -190,6 +190,14 @@ static esp_err_t handler_api_config_get(httpd_req_t *req)
     cJSON_AddStringToObject(root, "timezone", cfg->timezone);
     cJSON_AddNumberToObject(root, "motion_threshold", cfg->motion_threshold);
     cJSON_AddNumberToObject(root, "motion_cooldown", cfg->motion_cooldown);
+    // v3 fields
+    cJSON_AddStringToObject(root, "wifi_ssid2", cfg->wifi_ssid2);
+    cJSON_AddStringToObject(root, "wifi_pass2", cfg->wifi_pass2[0] ? "****" : "");
+    cJSON_AddStringToObject(root, "mdns_hostname", cfg->mdns_hostname);
+    cJSON_AddStringToObject(root, "webhook_url", cfg->webhook_url);
+    cJSON_AddStringToObject(root, "webhook_secret", cfg->webhook_secret[0] ? "****" : "");
+    cJSON_AddBoolToObject(root, "onvif_enabled", cfg->onvif_enabled);
+    cJSON_AddBoolToObject(root, "ws_enabled", cfg->ws_enabled);
 
     return json_ok(req, root);
 }
@@ -251,6 +259,25 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
         new_cfg.motion_threshold = (uint8_t)item->valuedouble;
     if ((item = cJSON_GetObjectItem(root, "motion_cooldown")) && cJSON_IsNumber(item))
         new_cfg.motion_cooldown = (uint8_t)item->valuedouble;
+    // v3 fields
+    if ((item = cJSON_GetObjectItem(root, "wifi_ssid2")) && cJSON_IsString(item))
+        strncpy(new_cfg.wifi_ssid2, item->valuestring, sizeof(new_cfg.wifi_ssid2) - 1);
+    if ((item = cJSON_GetObjectItem(root, "wifi_pass2")) && cJSON_IsString(item)) {
+        if (strcmp(item->valuestring, "****") != 0)
+            strncpy(new_cfg.wifi_pass2, item->valuestring, sizeof(new_cfg.wifi_pass2) - 1);
+    }
+    if ((item = cJSON_GetObjectItem(root, "mdns_hostname")) && cJSON_IsString(item))
+        strncpy(new_cfg.mdns_hostname, item->valuestring, sizeof(new_cfg.mdns_hostname) - 1);
+    if ((item = cJSON_GetObjectItem(root, "webhook_url")) && cJSON_IsString(item))
+        strncpy(new_cfg.webhook_url, item->valuestring, sizeof(new_cfg.webhook_url) - 1);
+    if ((item = cJSON_GetObjectItem(root, "webhook_secret")) && cJSON_IsString(item)) {
+        if (strcmp(item->valuestring, "****") != 0)
+            strncpy(new_cfg.webhook_secret, item->valuestring, sizeof(new_cfg.webhook_secret) - 1);
+    }
+    if ((item = cJSON_GetObjectItem(root, "onvif_enabled")) && cJSON_IsNumber(item))
+        new_cfg.onvif_enabled = (uint8_t)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(root, "ws_enabled")) && cJSON_IsNumber(item))
+        new_cfg.ws_enabled = (uint8_t)item->valuedouble;
 
     cJSON_Delete(root);
 

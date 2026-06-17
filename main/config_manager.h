@@ -12,7 +12,7 @@
 #include <stdbool.h>
 
 // 配置版本号
-#define CONFIG_VERSION 2
+#define CONFIG_VERSION 3
 
 // 配置魔数（用于验证配置有效性）
 #define CONFIG_MAGIC 0xA5B6C7D8
@@ -24,7 +24,7 @@
 #define CONFIG_DEFAULT_TIMEZONE "CST-8"
 #define CONFIG_DEFAULT_DEVICE_NAME "MiBeeCam"
 
-// 新版配置结构体 (v2)
+// 新版配置结构体 (v3)
 typedef struct {
     char wifi_ssid[33];        // WiFi SSID (32 chars + null)
     char wifi_pass[65];        // WiFi password (64 chars + null)
@@ -37,6 +37,14 @@ typedef struct {
     char timezone[33];         // Timezone string (32 chars + null)
     uint8_t motion_threshold;  // Motion detection threshold
     uint8_t motion_cooldown;   // Motion detection cooldown (seconds)
+    // v3 new fields
+    char wifi_ssid2[33];       // Backup WiFi SSID (32 chars + null, empty=disabled)
+    char wifi_pass2[65];       // Backup WiFi password (64 chars + null)
+    char mdns_hostname[33];    // mDNS hostname (32 chars + null, default "mibee")
+    char webhook_url[129];     // Webhook URL (128 chars + null, empty=disabled)
+    char webhook_secret[65];   // Webhook signing secret (64 chars + null)
+    uint8_t onvif_enabled;     // ONVIF discovery enabled (0=false, 1=true)
+    uint8_t ws_enabled;        // WebSocket push enabled (0=false, 1=true)
     uint32_t magic;            // Config magic number
     uint32_t version;          // Config version number
 } cam_config_t;
