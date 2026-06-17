@@ -13,10 +13,13 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "wifi_manager.h"
 #include "config_manager.h"
+#include "esp_mac.h"
+#include "esp_random.h"
 
 #ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
 
@@ -49,6 +52,91 @@ static int soap_envelope(char *buf, size_t buf_size, const char *body)
         body);
 }
 
+/**
+ * @brief Handle WS-Discovery Probe received over HTTP (directed discovery).
+ * Builds a ProbeMatches response with device UUID and RelatesTo from the incoming Probe.
+ */
+static esp_err_t handle_http_probe(httpd_req_t *req, const char *body)
+{
+    const char *ip = wifi_get_ip_str();
+    if (!ip || strcmp(ip, "0.0.0.0") == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No IP address");
+        return ESP_FAIL;
+    }
+
+    /* Generate device UUID from MAC */
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char device_uuid[64];
+    snprintf(device_uuid, sizeof(device_uuid),
+             "%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    /* Extract MessageID from incoming Probe for RelatesTo */
+    char relates_to[128] = "";
+    const char *mid = strstr(body, "MessageID");
+    if (mid) {
+        const char *gt = strchr(mid, '>');
+        if (gt) {
+            gt++;
+            const char *lt = strchr(gt, '<');
+            if (lt) {
+                size_t mlen = lt - gt;
+                if (mlen > 0 && mlen < sizeof(relates_to)) {
+                    memcpy(relates_to, gt, mlen);
+                    relates_to[mlen] = '\0';
+                }
+            }
+        }
+    }
+
+    uint32_t r1 = esp_random();
+    uint32_t r2 = esp_random();
+
+    char response[1536];
+    int n = snprintf(response, sizeof(response),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<soap:Envelope "
+        "xmlns:soap=\"http://www.w3.org/2003/05/soap-envelope\" "
+        "xmlns:wsa=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" "
+        "xmlns:wsdd=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\" "
+        "xmlns:dn=\"http://www.onvif.org/ver10/network/wsdl\">"
+        "<soap:Header>"
+        "<wsa:MessageID>urn:uuid:%08x%08x</wsa:MessageID>"
+        "<wsa:RelatesTo>urn:uuid:%s</wsa:RelatesTo>"
+        "<wsa:To>http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</wsa:To>"
+        "<wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/ProbeMatches</wsa:Action>"
+        "</soap:Header>"
+        "<soap:Body>"
+        "<wsdd:ProbeMatches>"
+        "<wsdd:ProbeMatch>"
+        "<wsa:EndpointReference>"
+        "<wsa:Address>urn:uuid:mibeecam</wsa:Address>"
+        "</wsa:EndpointReference>"
+        "<wsdd:Types>dn:NetworkVideoTransmitter</wsdd:Types>"
+        "<wsdd:Scopes>"
+        "onvif://www.onvif.org/Profile/Streaming "
+        "onvif://www.onvif.org/Model/MiBeeCam"
+        "</wsdd:Scopes>"
+        "<wsdd:XAddrs>http://%s/onvif/device_service</wsdd:XAddrs>"
+        "<wsdd:MetadataVersion>1</wsdd:MetadataVersion>"
+        "</wsdd:ProbeMatch>"
+        "</wsdd:ProbeMatches>"
+        "</soap:Body>"
+        "</soap:Envelope>",
+        (unsigned)r1, (unsigned)r2,
+        relates_to[0] ? relates_to : "00000000-0000-0000-0000-000000000000",
+        ip);
+
+    httpd_resp_set_type(req, "application/soap+xml; charset=utf-8");
+    if (n > 0) {
+        httpd_resp_send(req, response, n);
+    } else {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Response build failed");
+    }
+    return ESP_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /*  /onvif/device_service handler                                       */
 /* ------------------------------------------------------------------ */
@@ -68,6 +156,11 @@ static esp_err_t onvif_device_handler(httpd_req_t *req)
     }
 
     httpd_resp_set_type(req, "application/soap+xml; charset=utf-8");
+
+    /* Handle WS-Discovery Probe sent via HTTP (directed discovery) */
+    if (strstr(buf, "Probe") != NULL && strstr(buf, "ProbeMatches") == NULL) {
+        return handle_http_probe(req, buf);
+    }
 
     const char *ip = wifi_get_ip_str();
 
@@ -117,6 +210,38 @@ static esp_err_t onvif_device_handler(httpd_req_t *req)
             "</tt:Capabilities>"
             "</tds:GetCapabilitiesResponse>",
             ip, ip, ip, ip);
+        n = soap_envelope(response, sizeof(response), soap_body);
+        if (n >= (int)sizeof(response)) {
+            ESP_LOGW(TAG, "ONVIF response truncated");
+        }
+        httpd_resp_send(req, response, n);
+        return ESP_OK;
+    }
+
+    if (strstr(buf, "GetSystemDateAndTime")) {
+        time_t now = time(NULL);
+        struct tm *utc = gmtime(&now);
+        n = snprintf(soap_body, sizeof(soap_body),
+            "<tds:GetSystemDateAndTimeResponse>"
+            "<tt:SystemDateAndTime>"
+            "<tt:DateTimeType>UTC</tt:DateTimeType>"
+            "<tt:DaylightSavings>false</tt:DaylightSavings>"
+            "<tt:UTCDateTime>"
+            "<tt:Time>"
+            "<tt:Hour>%d</tt:Hour>"
+            "<tt:Minute>%d</tt:Minute>"
+            "<tt:Second>%d</tt:Second>"
+            "</tt:Time>"
+            "<tt:Date>"
+            "<tt:Year>%d</tt:Year>"
+            "<tt:Month>%d</tt:Month>"
+            "<tt:Day>%d</tt:Day>"
+            "</tt:Date>"
+            "</tt:UTCDateTime>"
+            "</tt:SystemDateAndTime>"
+            "</tds:GetSystemDateAndTimeResponse>",
+            utc->tm_hour, utc->tm_min, utc->tm_sec,
+            utc->tm_year + 1900, utc->tm_mon + 1, utc->tm_mday);
         n = soap_envelope(response, sizeof(response), soap_body);
         if (n >= (int)sizeof(response)) {
             ESP_LOGW(TAG, "ONVIF response truncated");
@@ -221,16 +346,10 @@ static esp_err_t onvif_media_handler(httpd_req_t *req)
     }
 
     if (strstr(buf, "GetStreamUri")) {
-        /*
-         * NOTE: The returned RTSP URI is not actually functional — there is
-         * no RTSP server in this firmware. This is included only for ONVIF
-         * Profile S discovery compatibility. NVRs that attempt to connect
-         * to this URI will fail. This is a known limitation.
-         */
         n = snprintf(soap_body, sizeof(soap_body),
             "<trt:GetStreamUriResponse>"
             "<tt:MediaUri>"
-            "<tt:Uri>rtsp://%s:8554/stream</tt:Uri>"
+            "<tt:Uri>http://%s:81/stream</tt:Uri>"
             "<tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>"
             "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot>"
             "<tt:Timeout>PT10S</tt:Timeout>"
