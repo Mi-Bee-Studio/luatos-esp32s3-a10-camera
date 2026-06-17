@@ -36,8 +36,7 @@
 static const char *TAG = "web_server";
 static httpd_handle_t s_server = NULL;
 
-/* Extern — will be provided by health_monitor module (T11) */
-extern float get_chip_temp(void);
+#include "health_monitor.h"
 
 /* ------------------------------------------------------------------ */
 /*  JSON / HTTP helpers                                                */
@@ -167,6 +166,16 @@ static esp_err_t handler_api_status(httpd_req_t *req)
 
     float temp = get_chip_temp();
     cJSON_AddNumberToObject(root, "chip_temp", temp);
+
+    size_t baseline_free = 0, baseline_min = 0;
+    health_get_baselines(&baseline_free, &baseline_min);
+    size_t current_free = esp_get_free_heap_size();
+    size_t current_min = esp_get_minimum_free_heap_size();
+    int heap_delta = (int)current_free - (int)baseline_free;
+    cJSON_AddNumberToObject(root, "heap_free", current_free);
+    cJSON_AddNumberToObject(root, "heap_min", current_min);
+    cJSON_AddNumberToObject(root, "heap_baseline", baseline_free);
+    cJSON_AddNumberToObject(root, "heap_delta", heap_delta);
 
     return json_ok(req, root);
 }
@@ -393,8 +402,11 @@ static esp_err_t handler_metrics(httpd_req_t *req)
     int stream_client_count = mjpeg_streamer_get_client_count();
     bool camera_init = camera_is_initialized();
     const char *ip_str = wifi_get_ip_str();
+    size_t baseline_free = 0, baseline_min = 0;
+    health_get_baselines(&baseline_free, &baseline_min);
+    int heap_delta = (int)free_heap - (int)baseline_free;
 
-    char buf[1024];
+    char buf[2048];
     int len = snprintf(buf, sizeof(buf),
         "# HELP esp_free_heap_bytes Free heap memory in bytes\n"
         "# TYPE esp_free_heap_bytes gauge\n"
@@ -422,9 +434,16 @@ static esp_err_t handler_metrics(httpd_req_t *req)
         "camera_initialized %d\n"
         "# HELP wifi_ip WiFi IP address\n"
         "# TYPE wifi_ip info\n"
-        "wifi_ip{ip=\"%s\"} 1\n",
+        "wifi_ip{ip=\"%s\"} 1\n"
+        "# HELP mibeecam_heap_baseline_bytes Heap baseline at init in bytes\n"
+        "# TYPE mibeecam_heap_baseline_bytes gauge\n"
+        "mibeecam_heap_baseline_bytes %u\n"
+        "# HELP mibeecam_heap_delta_bytes Heap delta from baseline in bytes\n"
+        "# TYPE mibeecam_heap_delta_bytes gauge\n"
+        "mibeecam_heap_delta_bytes %d\n",
         (unsigned)free_heap, (unsigned)free_psram, temp,
-        (int)ws, (unsigned)min_heap, (unsigned long long)esp_timer_get_time() / 1000000, stream_client_count, camera_init ? 1 : 0, ip_str);
+        (int)ws, (unsigned)min_heap, (unsigned long long)esp_timer_get_time() / 1000000, stream_client_count, camera_init ? 1 : 0, ip_str,
+        (unsigned)baseline_free, heap_delta);
 
     return httpd_resp_send(req, buf, len);
 }

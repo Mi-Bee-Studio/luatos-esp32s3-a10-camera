@@ -18,6 +18,10 @@ static const time_t temp_cache_duration = 5; // 5 seconds
 
 static TaskHandle_t health_task_handle = NULL;
 
+static size_t s_baseline_free_heap = 0;
+static size_t s_baseline_min_heap = 0;
+#define HEAP_WARNING_THRESHOLD 30720  // 30KB
+
 static float read_temperature_sensor(void) {
     time_t now = time(NULL);
     
@@ -63,8 +67,18 @@ static void health_monitor_task(void *pvParameters) {
             default: wifi_state_str = "Unknown"; break;
         }
         
-        ESP_LOGI(TAG, "Health Report | Uptime: %ld | Heap: %u/%u | PSRAM: %u | Min Heap: %u | Temp: %.2f\u00b0C | WiFi: %s",
-                 (long)uptime, (unsigned)free_heap, (unsigned)(free_heap - min_heap), (unsigned)free_psram, (unsigned)min_heap, temp, wifi_state_str);
+        int heap_delta = (int)free_heap - (int)s_baseline_free_heap;
+        ESP_LOGI(TAG, "Health Report | Uptime: %ld | Heap: %u/%u | PSRAM: %u | Min Heap: %u | Temp: %.2f\u00b0C | WiFi: %s | HeapDelta: %d",
+                 (long)uptime, (unsigned)free_heap, (unsigned)(free_heap - min_heap), (unsigned)free_psram, (unsigned)min_heap, temp, wifi_state_str, heap_delta);
+
+        // Per-task stack high water marks (diagnostic)
+        TaskStatus_t task_stats[20];
+        UBaseType_t task_count = uxTaskGetSystemState(task_stats, 20, NULL);
+        ESP_LOGD(TAG, "Task stack high water marks:");
+        for (UBaseType_t i = 0; i < task_count; i++) {
+            ESP_LOGD(TAG, "  %s: %u bytes free", task_stats[i].pcTaskName,
+                     (unsigned)uxTaskGetStackHighWaterMark(task_stats[i].xHandle) * sizeof(StackType_t));
+        }
         
         vTaskDelay(pdMS_TO_TICKS(60000)); // 60 seconds
     }
@@ -88,6 +102,12 @@ esp_err_t health_monitor_init(void) {
     
     // Initialize cached temperature
     cached_temp = read_temperature_sensor();
+
+    // Record heap baselines
+    s_baseline_free_heap = esp_get_free_heap_size();
+    s_baseline_min_heap = esp_get_minimum_free_heap_size();
+    ESP_LOGI(TAG, "Heap baselines recorded: free=%u, min=%u",
+             (unsigned)s_baseline_free_heap, (unsigned)s_baseline_min_heap);
     
     // Create health monitoring task
     BaseType_t task_ret = xTaskCreate(
@@ -122,6 +142,17 @@ esp_err_t health_monitor_deinit(void) {
     
     ESP_LOGI(TAG, "Health monitor deinitialized");
     return ESP_OK;
+}
+
+void health_get_baselines(size_t *free_heap_out, size_t *min_heap_out) {
+    if (free_heap_out) *free_heap_out = s_baseline_free_heap;
+    if (min_heap_out) *min_heap_out = s_baseline_min_heap;
+}
+
+void health_check_threshold(size_t *free_heap_out, bool *warning_out) {
+    size_t current = esp_get_free_heap_size();
+    if (free_heap_out) *free_heap_out = current;
+    if (warning_out) *warning_out = (current < HEAP_WARNING_THRESHOLD);
 }
 
 float get_chip_temp(void) {
