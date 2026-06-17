@@ -26,6 +26,7 @@
 #include "camera_driver.h"
 #include "mjpeg_streamer.h"
 #include "motion_detect.h"
+#include "event_bus.h"
 
 #include <stdbool.h>
 #include <string.h>
@@ -748,6 +749,34 @@ esp_err_t ws_broadcast_text(const char *msg, size_t len)
     ESP_LOGD(TAG, "WS broadcast to %d clients", sent_count);
     return ESP_OK;
 }
+
+static void event_to_json(const event_t *event, char *out_buf, size_t buf_len)
+{
+    const char *type_str = "unknown";
+    switch (event->type) {
+        case EVENT_MOTION_DETECTED: type_str = "motion_detected"; break;
+        case EVENT_MOTION_END: type_str = "motion_end"; break;
+        case EVENT_WIFI_STATE_CHANGED: type_str = "wifi_state_changed"; break;
+        case EVENT_WIFI_SWITCHED_SSID: type_str = "wifi_switched_ssid"; break;
+        case EVENT_STREAM_CLIENT_CONNECTED: type_str = "stream_client_connected"; break;
+        case EVENT_STREAM_CLIENT_DISCONNECTED: type_str = "stream_client_disconnected"; break;
+        case EVENT_HEALTH_WARNING: type_str = "health_warning"; break;
+        case EVENT_UPLOAD_SUCCESS: type_str = "upload_success"; break;
+        case EVENT_UPLOAD_FAILED: type_str = "upload_failed"; break;
+        default: break;
+    }
+    snprintf(out_buf, buf_len,
+             "{\"type\":\"%s\",\"timestamp\":%lld}",
+             type_str, (long long)(event->timestamp / 1000));
+}
+
+static void ws_event_handler(const event_t *event, void *user_data)
+{
+    (void)user_data;
+    char json_buf[256];
+    event_to_json(event, json_buf, sizeof(json_buf));
+    ws_broadcast_text(json_buf, strlen(json_buf));
+}
 #endif
 /* ------------------------------------------------------------------ */
 /*  Public API                                                         */
@@ -862,6 +891,19 @@ esp_err_t web_server_start(uint16_t port)
         .handle_ws_control_frames = true,
     };
     httpd_register_uri_handler(s_server, &uri_ws);
+#endif
+
+#ifdef CONFIG_MIBEECAM_ENABLE_WS
+    event_bus_subscribe(EVENT_MOTION_DETECTED, ws_event_handler, NULL, NULL);
+    event_bus_subscribe(EVENT_MOTION_END, ws_event_handler, NULL, NULL);
+    event_bus_subscribe(EVENT_WIFI_STATE_CHANGED, ws_event_handler, NULL, NULL);
+    event_bus_subscribe(EVENT_WIFI_SWITCHED_SSID, ws_event_handler, NULL, NULL);
+    event_bus_subscribe(EVENT_STREAM_CLIENT_CONNECTED, ws_event_handler, NULL, NULL);
+    event_bus_subscribe(EVENT_STREAM_CLIENT_DISCONNECTED, ws_event_handler, NULL, NULL);
+    event_bus_subscribe(EVENT_HEALTH_WARNING, ws_event_handler, NULL, NULL);
+    event_bus_subscribe(EVENT_UPLOAD_SUCCESS, ws_event_handler, NULL, NULL);
+    event_bus_subscribe(EVENT_UPLOAD_FAILED, ws_event_handler, NULL, NULL);
+    ESP_LOGI(TAG, "WS event subscriptions registered");
 #endif
 
     httpd_register_uri_handler(s_server, &options_any);
