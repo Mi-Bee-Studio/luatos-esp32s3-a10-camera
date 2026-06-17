@@ -391,6 +391,7 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
             if (motion_was_running) {
                 motion_detect_start();
             }
+            mjpeg_streamer_start();
         } else {
             ESP_LOGE(TAG, "Camera reinit failed: %s", esp_err_to_name(err));
             snprintf(message, sizeof(message), "Camera reinit failed");
@@ -878,8 +879,6 @@ esp_err_t web_server_start(uint16_t port)
 #ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
     httpd_register_uri_handler(s_server, &api_wifi_scan);
 #endif
-    /* Register MJPEG stream handler BEFORE wildcard to avoid interception */
-    mjpeg_streamer_register(s_server);
 
 #ifdef CONFIG_MIBEECAM_ENABLE_WS
     ws_clients_init();
