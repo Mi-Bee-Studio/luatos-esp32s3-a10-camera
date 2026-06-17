@@ -92,4 +92,19 @@ esp_err_t wifi_stop_retry(void);
  */
 esp_err_t wifi_scan(wifi_ap_record_t *results, uint16_t max_count, uint16_t *found_count);
 #endif // CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
+
+#ifdef CONFIG_MIBEECAM_ENABLE_MDNS
+/**
+ * @brief Start mDNS service with the given hostname
+ * @param hostname Hostname string (e.g., "mibee" → "mibee.local")
+ * @return ESP_OK on success
+ */
+esp_err_t wifi_start_mdns(const char *hostname);
+
+/**
+ * @brief Stop mDNS service
+ * @return ESP_OK on success
+ */
+esp_err_t wifi_stop_mdns(void);
+#endif
 #endif // WIFI_MANAGER_H

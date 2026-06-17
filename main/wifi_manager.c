@@ -10,6 +10,10 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include <string.h>
+#ifdef CONFIG_MIBEECAM_ENABLE_MDNS
+#include "mdns.h"
+#include "config_manager.h"
+#endif
 
 static const char *TAG = "wifi_manager";
 
@@ -117,6 +121,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         case WIFI_EVENT_AP_START:
             ESP_LOGI(TAG, "AP started (SSID: MiBeeCam)");
             set_state(WIFI_STATE_AP);
+#ifdef CONFIG_MIBEECAM_ENABLE_MDNS
+            {
+                char ap_hostname[40];
+                const char *base = config_get()->mdns_hostname;
+                snprintf(ap_hostname, sizeof(ap_hostname), "%s-ap", base ? base : "mibee");
+                wifi_start_mdns(ap_hostname);
+            }
+#endif
             break;
 
         case WIFI_EVENT_AP_STOP:
@@ -133,6 +145,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             ESP_LOGI(TAG, "STA got IP: %s", s_ip_str);
             s_retry_count = 0;
             set_state(WIFI_STATE_STA_CONNECTED);
+#ifdef CONFIG_MIBEECAM_ENABLE_MDNS
+            // Start mDNS with configured hostname
+            const char *hostname = config_get()->mdns_hostname;
+            if (hostname && hostname[0]) {
+                wifi_start_mdns(hostname);
+            }
+#endif
         }
     }
 }
@@ -451,6 +470,62 @@ esp_err_t wifi_manager_deinit(void)
     ESP_LOGI(TAG, "WiFi manager deinitialized");
     return ESP_OK;
 }
+
+#ifdef CONFIG_MIBEECAM_ENABLE_MDNS
+
+static bool s_mdns_started = false;
+
+esp_err_t wifi_start_mdns(const char *hostname)
+{
+    if (hostname == NULL || hostname[0] == '\0') {
+        ESP_LOGW(TAG, "mDNS: hostname is empty, skipping");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_mdns_started) {
+        ESP_LOGI(TAG, "mDNS already running, stopping first");
+        wifi_stop_mdns();
+    }
+
+    esp_err_t ret = mdns_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "mDNS init failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Set hostname
+    ret = mdns_hostname_set(hostname);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "mDNS hostname set failed: %s", esp_err_to_name(ret));
+        mdns_free();
+        return ret;
+    }
+
+    // Set instance name
+    mdns_instance_name_set("MiBeeCam");
+
+    // Add HTTP service on port 80
+    ret = mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS service add failed: %s", esp_err_to_name(ret));
+        // Non-fatal — hostname resolution still works
+    }
+
+    s_mdns_started = true;
+    ESP_LOGI(TAG, "mDNS started: %s.local", hostname);
+    return ESP_OK;
+}
+
+esp_err_t wifi_stop_mdns(void)
+{
+    if (s_mdns_started) {
+        mdns_free();
+        s_mdns_started = false;
+        ESP_LOGI(TAG, "mDNS stopped");
+    }
+    return ESP_OK;
+}
+#endif // CONFIG_MIBEECAM_ENABLE_MDNS
 
 #ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
 esp_err_t wifi_scan(wifi_ap_record_t *results, uint16_t max_count, uint16_t *found_count)
