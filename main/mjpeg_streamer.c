@@ -9,6 +9,9 @@
 
 #include "mjpeg_streamer.h"
 #include "camera_driver.h"
+#ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
+#include "frame_broadcaster.h"
+#endif
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "freertos/FreeRTOS.h"
@@ -50,6 +53,45 @@ static void IRAM_ATTR dec_client_count(void)
     xSemaphoreGive(s_mutex);
 }
 
+/**
+ * @brief Send a JPEG frame as a multipart chunk
+ * @param req HTTP request handle
+ * @param buf JPEG buffer pointer
+ * @param len JPEG buffer length
+ * @return ESP_OK on success, ESP_FAIL if client disconnected
+ */
+static esp_err_t stream_send_frame_chunk(httpd_req_t *req, const uint8_t *buf, size_t len)
+{
+    char part_hdr[128];
+    int hdrlen = snprintf(part_hdr, sizeof(part_hdr), STREAM_BOUNDARY, (unsigned int)len);
+
+    /* Send part header */
+    if (httpd_resp_send_chunk(req, part_hdr, hdrlen) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    /* Send JPEG body in chunks */
+    size_t remaining = len;
+    const uint8_t *ptr = buf;
+
+    while (remaining > 0) {
+        size_t chunk = (remaining > CHUNK_SIZE) ? CHUNK_SIZE : remaining;
+        if (httpd_resp_send_chunk(req, (const char *)ptr, chunk) != ESP_OK) {
+            return ESP_FAIL;
+        }
+        ptr += chunk;
+        remaining -= chunk;
+    }
+
+    /* Send trailing CRLF to close the part */
+    if (httpd_resp_send_chunk(req, "\r\n", 2) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+
 /* ---------- HTTP handler ---------- */
 
 esp_err_t mjpeg_streamer_http_handler(httpd_req_t *req)
@@ -73,12 +115,25 @@ esp_err_t mjpeg_streamer_http_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
     /* --- Streaming loop --- */
-    camera_fb_t *fb = NULL;
-    char part_hdr[128];
 
     int consecutive_failures = 0;
     while (1) {
-        /* Capture frame with retry (buffer may be temporarily unavailable) */
+#ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
+        /* Try broadcaster first (non-blocking, returns NOT_FOUND if no frame) */
+        frame_ref_t *frame_ref = NULL;
+        if (fbroadcast_acquire_latest(&frame_ref) == ESP_OK && frame_ref != NULL) {
+            if (stream_send_frame_chunk(req, frame_ref->buf, frame_ref->len) != ESP_OK) {
+                fbroadcast_release(frame_ref);
+                break;
+            }
+            fbroadcast_release(frame_ref);
+            consecutive_failures = 0;
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+#endif
+        /* Fallback: direct camera capture with retry */
+        camera_fb_t *fb = NULL;
         esp_err_t ret;
         int retries;
         for (retries = 0; retries < 3; retries++) {
@@ -98,43 +153,12 @@ esp_err_t mjpeg_streamer_http_handler(httpd_req_t *req)
             continue;
         }
         consecutive_failures = 0;
-        /* Build multipart header for this frame */
-        int hdrlen = snprintf(part_hdr, sizeof(part_hdr), STREAM_BOUNDARY, (unsigned int)fb->len);
 
-        /* Send part header */
-        if (httpd_resp_send_chunk(req, part_hdr, hdrlen) != ESP_OK) {
+        if (stream_send_frame_chunk(req, fb->buf, fb->len) != ESP_OK) {
             camera_return_fb(fb);
             break;
         }
-
-        /* Send JPEG body in chunks */
-        size_t remaining = fb->len;
-        const uint8_t *ptr = fb->buf;
-        bool send_ok = true;
-
-        while (remaining > 0) {
-            size_t chunk = (remaining > CHUNK_SIZE) ? CHUNK_SIZE : remaining;
-            if (httpd_resp_send_chunk(req, (const char *)ptr, chunk) != ESP_OK) {
-                send_ok = false;
-                break;
-            }
-            ptr += chunk;
-            remaining -= chunk;
-        }
-
-        /* Send trailing CRLF to close the part */
-        if (send_ok) {
-            if (httpd_resp_send_chunk(req, "\r\n", 2) != ESP_OK) {
-                send_ok = false;
-            }
-        }
-
-        /* Return frame buffer regardless of send outcome */
         camera_return_fb(fb);
-
-        if (!send_ok) {
-            break;
-        }
 
         /* Brief yield for watchdog and task switching */
         vTaskDelay(pdMS_TO_TICKS(1));
