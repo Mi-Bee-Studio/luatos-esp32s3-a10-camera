@@ -109,6 +109,12 @@ esp_err_t config_set(const cam_config_t *config);
 const char* config_get_timezone(void);
 
 /**
+ * @brief 线程安全地获取配置副本
+ * @param out 输出参数：配置结构体副本
+ */
+void config_get_copy(cam_config_t *out);
+
+/**
  * @brief 从 NVS 加载配置到提供的结构体
  * @param config 配置结构体指针
  * @return ESP_OK 成功，其他值失败
