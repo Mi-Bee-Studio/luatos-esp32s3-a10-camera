@@ -38,6 +38,68 @@ static httpd_handle_t s_server = NULL;
 
 #include "health_monitor.h"
 
+#ifdef CONFIG_MIBEECAM_ENABLE_WS
+#define WS_MAX_CLIENTS 5
+#define WS_IDLE_TIMEOUT_S 60
+
+typedef struct {
+    int sockfd;
+    httpd_handle_t server;
+    int64_t last_active;
+} ws_client_t;
+
+static ws_client_t s_ws_clients[WS_MAX_CLIENTS];
+static SemaphoreHandle_t s_ws_mutex = NULL;
+
+static void ws_clients_init(void) {
+    if (s_ws_mutex == NULL) {
+        s_ws_mutex = xSemaphoreCreateMutex();
+    }
+    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
+        s_ws_clients[i].sockfd = -1;
+        s_ws_clients[i].server = NULL;
+        s_ws_clients[i].last_active = 0;
+    }
+}
+
+static int ws_add_client(int sockfd, httpd_handle_t server) {
+    xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
+    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
+        if (s_ws_clients[i].sockfd == -1) {
+            s_ws_clients[i].sockfd = sockfd;
+            s_ws_clients[i].server = server;
+            s_ws_clients[i].last_active = esp_timer_get_time();
+            xSemaphoreGive(s_ws_mutex);
+            return i;
+        }
+    }
+    xSemaphoreGive(s_ws_mutex);
+    return -1;
+}
+
+static void ws_remove_client(int sockfd) {
+    xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
+    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
+        if (s_ws_clients[i].sockfd == sockfd) {
+            s_ws_clients[i].sockfd = -1;
+            s_ws_clients[i].server = NULL;
+            break;
+        }
+    }
+    xSemaphoreGive(s_ws_mutex);
+}
+
+static void ws_touch_client(int sockfd) {
+    xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
+    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
+        if (s_ws_clients[i].sockfd == sockfd) {
+            s_ws_clients[i].last_active = esp_timer_get_time();
+            break;
+        }
+    }
+    xSemaphoreGive(s_ws_mutex);
+}
+#endif
 /* ------------------------------------------------------------------ */
 /*  JSON / HTTP helpers                                                */
 /* ------------------------------------------------------------------ */
@@ -511,6 +573,50 @@ static esp_err_t handler_capture(httpd_req_t *req)
     return ret;
 }
 
+#ifdef CONFIG_MIBEECAM_ENABLE_WS
+static esp_err_t ws_handler(httpd_req_t *req)
+{
+    int sockfd = httpd_req_to_sockfd(req);
+
+    /* Detect initial WS handshake (called after server completes WS upgrade)
+     * req->method == HTTP_GET (set by HTTP parser) for initial handshake call
+     * req->method == 0 (init_req default) for subsequent WS frame calls */
+    if (req->method == HTTP_GET) {
+        int slot = ws_add_client(sockfd, req->handle);
+        if (slot < 0) {
+            ESP_LOGW(TAG, "WS client table full, rejecting");
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "WS client connected: fd=%d slot=%d", sockfd, slot);
+        return ESP_OK;
+    }
+
+    /* Receive WS frame — probe with 0 to get frame info */
+    httpd_ws_frame_t ws_pkt;
+    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+
+    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WS recv failed: %s, removing fd=%d", esp_err_to_name(ret), sockfd);
+        ws_remove_client(sockfd);
+        return ret;
+    }
+
+    /* Read and discard the full payload */
+    if (ws_pkt.len > 0) {
+        uint8_t *buf = malloc(ws_pkt.len);
+        if (buf) {
+            ws_pkt.payload = buf;
+            httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+            free(buf);
+        }
+    }
+
+    ws_touch_client(sockfd);
+    ESP_LOGD(TAG, "WS frame from fd=%d (dropped)", sockfd);
+    return ESP_OK;
+}
+#endif
 /* ------------------------------------------------------------------ */
 /*  OPTIONS / *  - CORS preflight                                       */
 /* ------------------------------------------------------------------ */
@@ -586,6 +692,59 @@ static esp_err_t handler_static(httpd_req_t *req)
     return ESP_OK;
 }
 
+#ifdef CONFIG_MIBEECAM_ENABLE_WS
+esp_err_t ws_broadcast_text(const char *msg, size_t len)
+{
+    if (msg == NULL || len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
+    httpd_handle_t server = NULL;
+    int sent_count = 0;
+
+    httpd_ws_frame_t ws_pkt = {
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)msg,
+        .len = len,
+        .final = true,
+    };
+
+    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
+        if (s_ws_clients[i].sockfd != -1) {
+            if (server == NULL) {
+                server = s_ws_clients[i].server;
+            }
+            int64_t now = esp_timer_get_time();
+            int64_t idle = now - s_ws_clients[i].last_active;
+            if (idle > WS_IDLE_TIMEOUT_S * 1000000LL) {
+                ESP_LOGI(TAG, "WS client idle timeout: fd=%d", s_ws_clients[i].sockfd);
+                if (server) {
+                    httpd_ws_frame_t close_pkt = { .type = HTTPD_WS_TYPE_CLOSE, .final = true };
+                    httpd_ws_send_frame_async(server, s_ws_clients[i].sockfd, &close_pkt);
+                }
+                s_ws_clients[i].sockfd = -1;
+                continue;
+            }
+
+            if (server) {
+                esp_err_t send_ret = httpd_ws_send_frame_async(server, s_ws_clients[i].sockfd, &ws_pkt);
+                if (send_ret == ESP_OK) {
+                    sent_count++;
+                } else {
+                    ESP_LOGW(TAG, "WS send failed to fd=%d: %s, removing",
+                             s_ws_clients[i].sockfd, esp_err_to_name(send_ret));
+                    s_ws_clients[i].sockfd = -1;
+                }
+            }
+        }
+    }
+
+    xSemaphoreGive(s_ws_mutex);
+    ESP_LOGD(TAG, "WS broadcast to %d clients", sent_count);
+    return ESP_OK;
+}
+#endif
 /* ------------------------------------------------------------------ */
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
@@ -688,6 +847,18 @@ esp_err_t web_server_start(uint16_t port)
 #endif
     /* Register MJPEG stream handler BEFORE wildcard to avoid interception */
     mjpeg_streamer_register(s_server);
+
+#ifdef CONFIG_MIBEECAM_ENABLE_WS
+    ws_clients_init();
+    httpd_uri_t uri_ws = {
+        .uri = "/ws",
+        .method = HTTP_GET,
+        .handler = ws_handler,
+        .is_websocket = true,
+        .handle_ws_control_frames = true,
+    };
+    httpd_register_uri_handler(s_server, &uri_ws);
+#endif
 
     httpd_register_uri_handler(s_server, &options_any);
     httpd_register_uri_handler(s_server, &static_any);

@@ -26,3 +26,14 @@ void web_server_stop(void);
  * @return Server handle, or NULL if not running.
  */
 httpd_handle_t web_server_get_handle(void);
+
+
+#ifdef CONFIG_MIBEECAM_ENABLE_WS
+/**
+ * @brief Broadcast a text message to all connected WebSocket clients
+ * @param msg Message string
+ * @param len Message length
+ * @return ESP_OK on success (even if no clients connected)
+ */
+esp_err_t ws_broadcast_text(const char *msg, size_t len);
+#endif
