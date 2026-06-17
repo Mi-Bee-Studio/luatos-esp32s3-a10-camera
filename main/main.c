@@ -26,6 +26,7 @@
 #include "webhook.h"
 #include "onvif_discovery.h"
 #include "onvif_service.h"
+#include "at_command.h"
 #include "esp_http_server.h"
 
 static const char *TAG = "main";
@@ -362,7 +363,11 @@ void app_main(void)
 
     /* Step 14: BOOT button factory reset monitor */
     xTaskCreate(boot_btn_task, "boot_btn", 4096, NULL, 5, NULL);
-    ESP_LOGI(TAG, "[14/14] BOOT button monitor started");
+    ESP_LOGI(TAG, "[14/15] BOOT button monitor started");
+
+    /* Step 15: AT command interface */
+    at_command_init();
+    ESP_LOGI(TAG, "[15/15] AT command interface started");
 
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  System startup complete");
