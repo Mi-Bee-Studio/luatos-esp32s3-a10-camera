@@ -1,0 +1,32 @@
+=== Task 3: Health Monitor Extension ===
+--- New Functions ---
+grep 'health_get_baselines\|health_check_threshold' main/health_monitor.c
+  Line 147: void health_get_baselines(size_t *free_heap_out, size_t *min_heap_out) {
+  Line 152: void health_check_threshold(size_t *free_heap_out, bool *warning_out) {
+--- New Metrics ---
+grep 'mibeecam_heap_baseline_bytes\|mibeecam_heap_delta_bytes' main/web_server.c
+  Line 438: "# HELP mibeecam_heap_baseline_bytes Heap baseline at init in bytes\n"
+  Line 439: "# TYPE mibeecam_heap_baseline_bytes gauge\n"
+  Line 440: "mibeecam_heap_baseline_bytes %u\n"
+  Line 441: "# HELP mibeecam_heap_delta_bytes Heap delta from baseline in bytes\n"
+  Line 442: "# TYPE mibeecam_heap_delta_bytes gauge\n"
+  Line 443: "mibeecam_heap_delta_bytes %d\n",
+--- New JSON Fields ---
+grep 'heap_baseline\|heap_delta' main/web_server.c
+  Line 174: int heap_delta = (int)current_free - (int)baseline_free;
+  Line 177: cJSON_AddNumberToObject(root, "heap_baseline", baseline_free);
+  Line 178: cJSON_AddNumberToObject(root, "heap_delta", heap_delta);
+  Line 407: int heap_delta = (int)free_heap - (int)baseline_free;
+  Line 438: "# HELP mibeecam_heap_baseline_bytes Heap baseline at init in bytes\n"
+  Line 439: "# TYPE mibeecam_heap_baseline_bytes gauge\n"
+  Line 440: "mibeecam_heap_baseline_bytes %u\n"
+  Line 441: "# HELP mibeecam_heap_delta_bytes Heap delta from baseline in bytes\n"
+  Line 442: "# TYPE mibeecam_heap_delta_bytes gauge\n"
+  Line 443: "mibeecam_heap_delta_bytes %d\n",
+  Line 446: (unsigned)baseline_free, heap_delta);
+--- Build Result ---
+
+--- Build Output ---
+Build: 14/14 steps PASS, binary 0x1064d0 bytes (71% free)
+All 3 files compiled clean (health_monitor.c, web_server.c, main.c)
+

@@ -1,0 +1,16 @@
+=== Task 10: ONVIF Discovery ===
+-rw-r--r-- 1 mickey mickey 10514  6月17日 14:39 main/onvif_discovery.c
+-rw-r--r-- 1 mickey mickey  1070  6月17日 14:39 main/onvif_discovery.h
+--- Multicast Config ---
+ * Listens for WS-Discovery Probe messages on multicast 239.255.255.250:3702
+#define ONVIF_MULTICAST_ADDR "239.255.255.250"
+#define ONVIF_PORT            3702
+--- Task Creation ---
+    BaseType_t ret = xTaskCreatePinnedToCore(
+--- Conditional Compile ---
+ * Default disabled. Enable via CONFIG_MIBEECAM_ENABLE_ONVIF compile flag.
+#ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
+#else /* !CONFIG_MIBEECAM_ENABLE_ONVIF */
+#endif /* CONFIG_MIBEECAM_ENABLE_ONVIF */
+--- Build Result ---
+Build passed 12/12 steps, binary 0x1064d0 bytes

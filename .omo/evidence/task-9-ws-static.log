@@ -1,0 +1,21 @@
+=== Task 9: WebSocket Server ===
+--- URI + Handler ---
+grep: .uri = "/ws",
+--- WS flag ---
+grep: .is_websocket = true,
+--- Public API ---
+grep: esp_err_t ws_broadcast_text(const char *msg, size_t len);
+--- URI order ---
+838:    httpd_register_uri_handler(s_server, &api_status);
+839:    httpd_register_uri_handler(s_server, &api_config_get);
+840:    httpd_register_uri_handler(s_server, &api_config_post);
+841:    httpd_register_uri_handler(s_server, &api_reset);
+842:    httpd_register_uri_handler(s_server, &api_reboot);
+843:    httpd_register_uri_handler(s_server, &metrics);
+844:    httpd_register_uri_handler(s_server, &capture);
+846:    httpd_register_uri_handler(s_server, &api_wifi_scan);
+860:    httpd_register_uri_handler(s_server, &uri_ws);
+863:    httpd_register_uri_handler(s_server, &options_any);
+864:    httpd_register_uri_handler(s_server, &static_any);
+--- Build ---
+1099/1099 steps PASS, binary 0x110a60 bytes (70% free)

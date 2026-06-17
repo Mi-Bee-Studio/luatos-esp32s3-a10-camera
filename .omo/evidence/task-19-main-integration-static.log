@@ -1,0 +1,17 @@
+=== Task 19: Main Integration ===
+--- New module init calls ---
+                esp_err_t wh_ret = webhook_init();
+                esp_err_t onvif_ret = onvif_discovery_start();
+                        onvif_ret = onvif_service_start(server);
+    ret = event_bus_init();
+        esp_err_t fb_ret = fbroadcast_init();
+                esp_err_t onvif_ret = onvif_discovery_start();
+                        onvif_ret = onvif_service_start(server);
+--- Boot order (camera before WiFi) ---
+238:        ret = camera_init((camera_resolution_t)cam_cfg->resolution, cam_cfg->fps, cam_cfg->jpeg_quality);
+259:    ret = wifi_init();
+--- Docs updated ---
+docs/en/software.md
+docs/zh-CN/software.md
+README.md
+--- Build PASS (verified by Atlas) ---

@@ -1,0 +1,17 @@
+=== Task 12: ONVIF SOAP Service ===
+
+Endpoints registered:
+  /onvif/device_service -> onvif_device_handler
+  /onvif/media_service  -> onvif_media_handler
+
+5 SOAP methods implemented:
+  GetDeviceInformation - Returns Manufacturer=MiBee, Model=MiBeeCam, FW=1.0, SN=<IP>, HW=ESP32-S3
+  GetCapabilities     - Returns Device/Media/PTZ/Events service XAddrs
+  GetServices         - Returns device_service + media_service with versions
+  GetProfiles         - Returns MainStream profile with VGA MJPEG VideoEncoderConfiguration
+  GetStreamUri        - Returns rtsp://<ip>:8554/stream (NOTE: no RTSP server, discovery-only)
+
+Build: PASS (with onvif_service.c temporarily in CMakeLists.txt for test, then reverted)
+Methods in source: 17 grep hits (method names in logic + namespace strings)
+CMakeLists reverted: YES
+State after build: onvif_service.c/h created, CMakeLists.txt unchanged

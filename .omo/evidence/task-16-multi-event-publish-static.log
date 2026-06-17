@@ -1,0 +1,14 @@
+=== Task 16: Multi-Event Publish ===
+health_monitor.c:79:                .type = EVENT_HEALTH_WARNING,
+health_monitor.c:84:            event_bus_publish(&health_event);
+
+wifi_manager.c:63:            .type = EVENT_WIFI_STATE_CHANGED,
+wifi_manager.c:68:        event_bus_publish(&wifi_event);
+
+mjpeg_streamer.c:116:        .type = EVENT_STREAM_CLIENT_CONNECTED,
+mjpeg_streamer.c:121:    event_bus_publish(&connect_event);
+mjpeg_streamer.c:184:        .type = EVENT_STREAM_CLIENT_DISCONNECTED,
+mjpeg_streamer.c:189:    event_bus_publish(&disconnect_event);
+
+--- Build ---
+Build: PASS (9/9 steps)

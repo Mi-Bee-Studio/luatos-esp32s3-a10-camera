@@ -1,0 +1,27 @@
+=== Task 8: Frame Broadcaster Module ===
+--- Files ---
+-rw-r--r-- 1 mickey mickey 5108  6月17日 14:33 main/frame_broadcaster.c
+-rw-r--r-- 1 mickey mickey 2562  6月17日 14:33 main/frame_broadcaster.h
+--- API ---
+    uint8_t *buf;           /**< Pointer to JPEG data (valid until fbroadcast_release) */
+esp_err_t fbroadcast_init(void);
+esp_err_t fbroadcast_publish(const uint8_t *jpeg_buf, size_t len, uint64_t ts);
+ *        Increases ref_count. Consumer must call fbroadcast_release() when done.
+esp_err_t fbroadcast_acquire_latest(frame_ref_t **out);
+ * @param frame Pointer returned by fbroadcast_acquire_latest()
+void fbroadcast_release(frame_ref_t *frame);
+--- MAX_FRAME_SIZE ---
+#define MAX_FRAME_SIZE (50 * 1024)
+static uint8_t s_frame_buf[MAX_FRAME_SIZE];
+             (unsigned)MAX_FRAME_SIZE);
+    if (len > MAX_FRAME_SIZE) {
+                 (unsigned)len, (unsigned)MAX_FRAME_SIZE);
+--- Ref counting ---
+ * (ref_count > 0), the new frame is silently dropped. This prevents blocking
+    .ref_count    = 0,
+    s_latest_frame.ref_count    = 0;
+    if (s_latest_frame.ref_count > 0) {
+        ESP_LOGW(TAG, "Frame dropped: ref_count=%u (consumer still holding previous frame)",
+--- Build Result ---
+1099/1099 steps PASS, binary 0x1064d0 bytes (71% free)
+--- CMakeLists.txt ---

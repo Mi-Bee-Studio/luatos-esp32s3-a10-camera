@@ -1,0 +1,15 @@
+=== Task 2: Event Bus Module ===
+=== File Existence ===
+-rw-r--r-- 1 mickey mickey 5289  6月17日 13:58 main/event_bus.c
+-rw-r--r-- 1 mickey mickey 3619  6月17日 13:58 main/event_bus.h
+=== CMakeLists Registration ===
+    SRCS "event_bus.c" "cJSON.c" "config_manager.c" "wifi_manager.c" "camera_driver.c" "mjpeg_streamer.c" "web_server.c" "status_led.c" "time_sync.c" "health_monitor.c" "motion_detect.c" "main.c"
+=== API Functions ===
+esp_err_t event_bus_init(void);
+esp_err_t event_bus_subscribe(event_type_t type, event_handler_t handler, void *user_data, subscription_id_t *out_id);
+esp_err_t event_bus_unsubscribe(subscription_id_t id);
+esp_err_t event_bus_publish(const event_t *event);
+=== Event Types (count) ===
+12
+=== Build Result ===
+Build PASSED - 962/962 steps, binary 0x105990 bytes

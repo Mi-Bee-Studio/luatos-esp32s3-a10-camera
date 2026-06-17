@@ -1,0 +1,37 @@
+=== Task 13: Motion Detect Refactor ===
+--- fbroadcast usage ---
+169:        if (fbroadcast_acquire_latest(&ref_a) == ESP_OK) {
+200:                fbroadcast_release(ref_a);
+217:            fbroadcast_release(ref_a);
+235:        if (fbroadcast_acquire_latest(&ref_b) == ESP_OK) {
+271:            fbroadcast_release(ref_b);
+297:                    if (fbroadcast_acquire_latest(&ref_upload) == ESP_OK) {
+308:                            fbroadcast_release(ref_upload);  // Unblock broadcaster immediately
+312:                            fbroadcast_release(ref_upload);
+
+--- event_bus_publish ---
+291:                event_bus_publish(&motion_event);
+369:                event_bus_publish(&motion_end);
+
+--- EVENT_MOTION types ---
+286:                    .type = EVENT_MOTION_DETECTED,
+364:                    .type = EVENT_MOTION_END,
+
+--- camera_capture (fallback only) ---
+175:            if (camera_capture(&fb_a) != ESP_OK || fb_a == NULL) {
+241:            if (camera_capture(&fb_b) != ESP_OK || fb_b == NULL) {
+318:                        if (camera_capture(&fb_upload) == ESP_OK && fb_upload != NULL) {
+
+--- upload_image/upload_with_retry ---
+73:static esp_err_t upload_image(const uint8_t *jpeg_buf, size_t jpeg_len)
+121:static esp_err_t upload_with_retry(const uint8_t *buf, size_t len)
+124:        esp_err_t err = upload_image(buf, len);
+309:                            upload_with_retry(s_jpeg_copy, upload_len);
+330:                                upload_with_retry(s_jpeg_copy, upload_len);
+
+--- Stack size ---
+44:#define MOTION_TASK_STACK_SIZE 10240
+405:        MOTION_TASK_STACK_SIZE,
+
+--- Build ---
+Build: PASSED (9/9 steps)

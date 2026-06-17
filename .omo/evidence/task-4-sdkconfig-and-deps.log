@@ -1,0 +1,16 @@
+=== Task 4: sdkconfig + Component Deps ===
+=== WS Support Check ===
+CONFIG_HTTPD_WS_SUPPORT=y
+=== mDNS Dep Check ===
+  espressif/mdns:
+=== Constraint Checks ===
+PSRAM enabled:
+(none - PASS)
+AMPDU enabled:
+(none - PASS)
+Log DEBUG+:
+(none - PASS)
+=== Generated sdkconfig Check ===
+CONFIG_HTTPD_WS_SUPPORT=y
+=== Build Result ===
+Build PASSED - 962/962 steps

@@ -1,0 +1,16 @@
+=== Task 6: mDNS Integration ===
+--- wifi_manager.c mDNS include + calls ---
+129:                wifi_start_mdns(ap_hostname);
+152:                wifi_start_mdns(hostname);
+478:esp_err_t wifi_start_mdns(const char *hostname)
+487:        wifi_stop_mdns();
+490:    esp_err_t ret = mdns_init();
+497:    ret = mdns_hostname_set(hostname);
+508:    ret = mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+519:esp_err_t wifi_stop_mdns(void)
+--- wifi_manager.h declarations ---
+102:esp_err_t wifi_start_mdns(const char *hostname);
+108:esp_err_t wifi_stop_mdns(void);
+--- Build ---
+Build: 16/16 steps PASS, binary 0x110740 bytes (70% free)
+All constraints intact: PSRAM off, AMPDU off, log INFO

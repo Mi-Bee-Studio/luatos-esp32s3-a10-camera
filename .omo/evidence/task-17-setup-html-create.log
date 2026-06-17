@@ -1,0 +1,8 @@
+=== Task 17: Setup Wizard ===
+ls -la main/web_ui/setup.html
+-rw-r--r-- 1 mickey mickey 19757 Jun 17 15:15 main/web_ui/setup.html
+wc -c main/web_ui/setup.html
+19757 main/web_ui/setup.html
+grep -c 'step-' main/web_ui/setup.html
+5
+--- Done ---

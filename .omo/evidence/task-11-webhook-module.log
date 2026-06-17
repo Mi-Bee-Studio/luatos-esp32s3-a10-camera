@@ -1,0 +1,30 @@
+=== Task 11: Webhook Module ===
+-rw-r--r-- 1 mickey mickey 13752  6月17日 14:40 main/webhook.c
+-rw-r--r-- 1 mickey mickey  1485  6月17日 14:39 main/webhook.h
+--- Task + Queue ---
+57:static QueueHandle_t  s_webhook_queue   = NULL;
+130:        if (xQueueReceive(s_webhook_queue, &item, portMAX_DELAY) != pdTRUE) {
+237:    if (s_webhook_queue != NULL) {
+250:    s_webhook_queue = xQueueCreate(WEBHOOK_QUEUE_LENGTH, sizeof(webhook_queue_item_t));
+251:    if (s_webhook_queue == NULL) {
+257:    BaseType_t ret = xTaskCreatePinnedToCore(
+269:        vQueueDelete(s_webhook_queue);
+270:        s_webhook_queue = NULL;
+313:    if (s_webhook_queue == NULL) {
+343:    BaseType_t queued = xQueueSend(s_webhook_queue, &item, 0);
+354:    return s_webhook_active && (s_webhook_queue != NULL);
+--- API ---
+4: * Events are enqueued via webhook_emit() and sent by a dedicated task.
+30:esp_err_t webhook_init(void);
+38:esp_err_t webhook_emit(const char *event_type, const char *payload_json);
+--- HTTP Client ---
+20:#include "esp_http_client.h"
+176:        esp_http_client_config_t http_cfg = {
+183:        esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+189:        esp_http_client_set_header(client, "Content-Type", "application/json");
+190:        esp_http_client_set_header(client, "X-MiBee-Event", item.event_type);
+--- Event Bus Integration ---
+212:            event_bus_publish(&evt);
+222:            event_bus_publish(&evt);
+289:        esp_err_t sub_err = event_bus_subscribe(
+--- Build Result ---

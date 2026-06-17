@@ -1,0 +1,23 @@
+=== Task 1: Config v2→v3 Migration ===
+=== Version Check ===
+#define CONFIG_VERSION 3
+=== New Fields Check ===
+7
+=== Magic Check (must be unchanged) ===
+#define CONFIG_MAGIC 0xA5B6C7D8
+=== Compile Flags Check ===
+CONFIG_MIBEECAM_ENABLE_WEBHOOK=y
+CONFIG_MIBEECAM_ENABLE_ONVIF=y
+CONFIG_MIBEECAM_ENABLE_WS=y
+CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER=y
+CONFIG_MIBEECAM_ENABLE_BACKUP_SSID=y
+CONFIG_MIBEECAM_ENABLE_MDNS=y
+CONFIG_MIBEECAM_ENABLE_WIFI_SCAN=y
+=== Migration Function Check ===
+2
+=== JSON Handler Updates ===
+9
+=== Kconfig.projbuild Check ===
+7
+=== Build Result ===
+IDF_SKIP_SUBMODULE_CHECK=1 idf.py build: PASS (1099/1099 steps, binary 0x106020 bytes, 71% free)

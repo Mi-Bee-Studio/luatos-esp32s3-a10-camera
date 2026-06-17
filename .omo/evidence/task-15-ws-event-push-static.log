@@ -1,0 +1,11 @@
+=== Task 15: WS Event Push ===
+event_bus_subscribe count:
+9
+ws_broadcast_text calls:
+esp_err_t ws_broadcast_text(const char *msg, size_t len)
+    ws_broadcast_text(json_buf, strlen(json_buf));
+event_to_json defined:
+static void event_to_json(const event_t *event, char *out_buf, size_t buf_len)
+    event_to_json(event, json_buf, sizeof(json_buf));
+--- Build ---
+Build: PASSED (1068/1068 steps)

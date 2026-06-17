@@ -1,0 +1,13 @@
+=== Task 5: WiFi Scan API ===
+--- wifi_scan declaration ---
+esp_err_t wifi_scan(wifi_ap_record_t *results, uint16_t max_count, uint16_t *found_count);
+--- URI registration ---
+        .uri      = "/api/wifi/scan",
+--- URI order ---
+876:    httpd_register_uri_handler(s_server, &metrics);
+877:    httpd_register_uri_handler(s_server, &capture);
+879:    httpd_register_uri_handler(s_server, &api_wifi_scan);
+893:    httpd_register_uri_handler(s_server, &uri_ws);
+909:    httpd_register_uri_handler(s_server, &options_any);
+910:    httpd_register_uri_handler(s_server, &static_any);
+--- Build PASS (verified by Atlas) ---

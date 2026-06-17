@@ -1,0 +1,19 @@
+=== Task 7: Backup SSID ===
+--- wifi_ssid2 | active_ssid_index | wifi_get_current_ssid_index in wifi_manager.c ---
+13
+
+--- CONFIG_MIBEECAM_ENABLE_BACKUP_SSID in wifi_manager.c ---
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+
+--- active_ssid_index in web_server.c ---
+    cJSON_AddNumberToObject(root, "active_ssid_index", wifi_get_current_ssid_index());
+
+--- wifi_get_current_ssid_index in wifi_manager.h ---
+int wifi_get_current_ssid_index(void);
+
+--- Build ---
+BUILD PASSED - 16/16 steps

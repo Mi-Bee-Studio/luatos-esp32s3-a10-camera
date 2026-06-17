@@ -1,0 +1,22 @@
+=== Task 1: Verification ===
+--- Version Check ---
+#define CONFIG_VERSION 3
+--- Magic Check ---
+#define CONFIG_MAGIC 0xA5B6C7D8
+--- New Fields in struct ---
+7
+--- Kconfig symbols in generated sdkconfig ---
+CONFIG_MIBEECAM_ENABLE_WEBHOOK=y
+CONFIG_MIBEECAM_ENABLE_ONVIF=y
+CONFIG_MIBEECAM_ENABLE_WS=y
+CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER=y
+CONFIG_MIBEECAM_ENABLE_BACKUP_SSID=y
+CONFIG_MIBEECAM_ENABLE_MDNS=y
+CONFIG_MIBEECAM_ENABLE_WIFI_SCAN=y
+--- Constraint Check ---
+PSRAM: OFF (PASS)
+AMPDU: OFF (PASS)
+Log: INFO (PASS)
+--- Migration function ---
+2
+=== ALL CHECKS PASS ===
