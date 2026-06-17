@@ -46,14 +46,12 @@ CONFIG_HTTPD_WS_SUPPORT=y
 CONFIG_HTTPD_WS_KEEPALIVE_DELAY=1000
 
 
-# WiFi - disable WPA3 to prevent SAE auth issues
+# WiFi - disable WPA3 to prevent SAE auth issues (AMPDU disabled bypasses stall)
 # CONFIG_ESP_WIFI_ENABLE_WPA3_SAE is not set
 # CONFIG_ESP_WIFI_ENABLE_SAE_PK is not set
 # CONFIG_ESP_WIFI_ENABLE_SAE_H2E is not set
 # CONFIG_ESP_WIFI_SOFTAP_SAE_SUPPORT is not set
 # CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA is not set
-# CONFIG_ESP32_WIFI_ENABLE_WPA3_SAE is not set
-# CONFIG_ESP32_WIFI_ENABLE_WPA3_OWE_STA is not set
 
 # WiFi - disable AMPDU TX/RX (same as working seeed-esp32s3-cam)
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
