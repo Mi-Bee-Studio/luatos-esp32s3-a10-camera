@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include <string.h>
 #include <time.h>
+#include "event_bus.h"
 
 static const char *TAG = "health_monitor";
 
@@ -71,6 +72,19 @@ static void health_monitor_task(void *pvParameters) {
         ESP_LOGI(TAG, "Health Report | Uptime: %ld | Heap: %u/%u | PSRAM: %u | Min Heap: %u | Temp: %.2f\u00b0C | WiFi: %s | HeapDelta: %d",
                  (long)uptime, (unsigned)free_heap, (unsigned)(free_heap - min_heap), (unsigned)free_psram, (unsigned)min_heap, temp, wifi_state_str, heap_delta);
 
+        // Check heap threshold and publish warning
+        size_t current_free = esp_get_free_heap_size();
+        if (current_free < 30720) {  // 30KB threshold
+            event_t health_event = {
+                .type = EVENT_HEALTH_WARNING,
+                .timestamp = esp_timer_get_time(),
+                .payload = NULL,
+                .payload_len = 0,
+            };
+            event_bus_publish(&health_event);
+            ESP_LOGW(TAG, "Health warning: free heap %u < 30KB threshold", (unsigned)current_free);
+        }
+
         // Per-task stack high water marks (diagnostic)
         TaskStatus_t task_stats[20];
         UBaseType_t task_count = uxTaskGetSystemState(task_stats, 20, NULL);
@@ -80,7 +94,7 @@ static void health_monitor_task(void *pvParameters) {
                      (unsigned)uxTaskGetStackHighWaterMark(task_stats[i].xHandle) * sizeof(StackType_t));
         }
         
-        vTaskDelay(pdMS_TO_TICKS(60000)); // 60 seconds
+        vTaskDelay(pdMS_TO_TICKS(30000)); // 30 seconds
     }
 }
 

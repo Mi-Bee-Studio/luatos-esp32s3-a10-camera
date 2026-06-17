@@ -18,6 +18,7 @@
 #include "freertos/semphr.h"
 #include <string.h>
 #include <stdio.h>
+#include "event_bus.h"
 
 static const char *TAG = "mjpeg_streamer";
 
@@ -110,6 +111,15 @@ esp_err_t mjpeg_streamer_http_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "Stream client connected (total %d/%d)", s_client_count, MAX_STREAM_CLIENTS);
 
+    // Publish client connected event
+    event_t connect_event = {
+        .type = EVENT_STREAM_CLIENT_CONNECTED,
+        .timestamp = esp_timer_get_time(),
+        .payload = NULL,
+        .payload_len = 0,
+    };
+    event_bus_publish(&connect_event);
+
     /* --- Response headers --- */
     httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -168,6 +178,15 @@ esp_err_t mjpeg_streamer_http_handler(httpd_req_t *req)
     httpd_resp_send_chunk(req, NULL, 0);  /* end chunked response */
     dec_client_count();
     ESP_LOGI(TAG, "Stream client disconnected (total %d)", s_client_count);
+
+    // Publish client disconnected event
+    event_t disconnect_event = {
+        .type = EVENT_STREAM_CLIENT_DISCONNECTED,
+        .timestamp = esp_timer_get_time(),
+        .payload = NULL,
+        .payload_len = 0,
+    };
+    event_bus_publish(&disconnect_event);
     return ESP_OK;
 }
 

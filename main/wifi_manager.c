@@ -58,6 +58,14 @@ static void set_state(wifi_state_t new_state)
         ESP_LOGI(TAG, "State: %d -> %d", s_state, new_state);
         s_state = new_state;
         notify_state(new_state);
+        // Publish WiFi state change event
+        event_t wifi_event = {
+            .type = EVENT_WIFI_STATE_CHANGED,
+            .timestamp = esp_timer_get_time(),
+            .payload = NULL,
+            .payload_len = 0,
+        };
+        event_bus_publish(&wifi_event);
     }
 }
 
