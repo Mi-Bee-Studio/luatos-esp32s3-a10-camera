@@ -385,6 +385,11 @@ static esp_err_t config_migrate_v2_to_v3(cam_config_t *config)
  */
 esp_err_t config_init(void)
 {
+    static bool s_config_initialized = false;
+    if (s_config_initialized) {
+        return ESP_OK;
+    }
+
     // 初始化 NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -417,6 +422,9 @@ esp_err_t config_init(void)
             ESP_LOGI(TAG, "Namespace migration successful");
             // 迁移成功，保存配置到新命名空间
             ret = config_save(&s_config);
+            if (ret == ESP_OK) {
+                s_config_initialized = true;
+            }
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to save migrated config: %s", esp_err_to_name(ret));
             }
@@ -435,6 +443,7 @@ esp_err_t config_init(void)
     
     if (ret == ESP_OK && s_config.magic == CONFIG_MAGIC && s_config.version == CONFIG_VERSION) {
         ESP_LOGI(TAG, "Config v3 loaded successfully from %s namespace", NVS_NAMESPACE);
+        s_config_initialized = true;
         return ESP_OK;
     }
     
@@ -444,6 +453,9 @@ esp_err_t config_init(void)
         ret = config_migrate_v2_to_v3(&s_config);
         if (ret == ESP_OK) {
             esp_err_t save_ret = config_save(&s_config);
+            if (save_ret == ESP_OK) {
+                s_config_initialized = true;
+            }
             if (save_ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to save v2→v3 migrated config: %s", esp_err_to_name(save_ret));
             }
@@ -468,6 +480,9 @@ esp_err_t config_init(void)
         s_config.version = CONFIG_VERSION;
     
         esp_err_t save_ret = config_save(&s_config);
+        if (save_ret == ESP_OK) {
+            s_config_initialized = true;
+        }
         if (save_ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to save migrated config: %s", esp_err_to_name(save_ret));
         }
@@ -477,54 +492,7 @@ esp_err_t config_init(void)
     // 所有迁移都失败，使用默认值
     ESP_LOGW(TAG, "No valid config found, using defaults");
     config_set_defaults(&s_config);
-    return ESP_OK;
-    memset(&s_config, 0, sizeof(s_config));
-    ret = config_read_blob(&s_config, sizeof(cam_config_t), NULL);
-
-    if (ret == ESP_OK && s_config.magic == CONFIG_MAGIC && s_config.version == CONFIG_VERSION) {
-        ESP_LOGI(TAG, "Config v3 loaded successfully");
-        return ESP_OK;
-    }
-
-    // v3 加载失败，尝试从 v2 迁移
-    if (ret == ESP_OK && s_config.magic == CONFIG_MAGIC && s_config.version == 2) {
-        ESP_LOGW(TAG, "v2 config detected, attempting v2\u2192v3 migration...");
-        ret = config_migrate_v2_to_v3(&s_config);
-        if (ret == ESP_OK) {
-            esp_err_t save_ret = config_save(&s_config);
-            if (save_ret != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to save v2\u2192v3 migrated config: %s", esp_err_to_name(save_ret));
-            }
-            return (save_ret == ESP_OK) ? ESP_OK : save_ret;
-        }
-    }
-
-    // v2 迁移也失败或不存在，尝试从 v1 迁移
-    ESP_LOGW(TAG, "v3 config not valid, attempting v1 migration...");
-    ret = config_migrate_v1_to_v2(&s_config);
-    if (ret == ESP_OK) {
-        // Set v3 defaults for new fields
-        s_config.wifi_ssid2[0] = '\0';
-        s_config.wifi_pass2[0] = '\0';
-        strncpy(s_config.mdns_hostname, "mibee", sizeof(s_config.mdns_hostname) - 1);
-        s_config.mdns_hostname[sizeof(s_config.mdns_hostname) - 1] = '\0';
-        s_config.webhook_url[0] = '\0';
-        s_config.webhook_secret[0] = '\0';
-        s_config.onvif_enabled = 0;
-        s_config.ws_enabled = 1;
-        s_config.magic = CONFIG_MAGIC;
-        s_config.version = CONFIG_VERSION;
-
-        esp_err_t save_ret = config_save(&s_config);
-        if (save_ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to save migrated config: %s", esp_err_to_name(save_ret));
-        }
-        return (save_ret == ESP_OK) ? ESP_OK : save_ret;
-    }
-
-    // 所有迁移都失败，使用默认值
-    ESP_LOGW(TAG, "No valid config found, using defaults");
-    config_set_defaults(&s_config);
+    s_config_initialized = true;
     return ESP_OK;
 }
 
