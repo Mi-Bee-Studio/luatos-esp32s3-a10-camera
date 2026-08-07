@@ -10,6 +10,9 @@
 #include <stdint.h>
 #include "esp_err.h"
 #include <stdbool.h>
+#include "cJSON.h"
+#include "esp_err.h"
+#include <stdbool.h>
 
 // 配置版本号
 #define CONFIG_VERSION 3
@@ -119,6 +122,24 @@ void config_get_copy(cam_config_t *out);
  * @param config 配置结构体指针
  * @return ESP_OK 成功，其他值失败
  */
+/**
+ * @brief 从 NVS 加载配置到提供的结构体
+ * @param config 配置结构体指针
+ * @return ESP_OK 成功，其他值失败
+ */
 esp_err_t config_load_from_nvs(cam_config_t *config);
 
+/**
+ * @brief 获取配置为 JSON 对象（cam_* 字段名前缀）
+ * @return cJSON* 对象，调用者负责释放内存
+ */
+cJSON* config_get_json(void);
+
+/**
+ * @brief 获取 Web UI 密码
+ * @return Web UI 密码字符串指针（指向静态实例）
+ */
+const char* config_get_web_password(void);
+
 #endif // CONFIG_MANAGER_H
+
