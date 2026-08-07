@@ -308,7 +308,7 @@ static esp_err_t handler_api_status(httpd_req_t *req)
 #endif
 
     cJSON_AddStringToObject(data, "camera", camera_get_sensor_name());
-    cJSON_AddStringToObject(data, "resolution", res_to_str(cfg->resolution));
+    cJSON_AddStringToObject(data, "cam_framesize", res_to_str(cfg->resolution));
 
     cJSON_AddNumberToObject(data, "uptime", (double)(esp_timer_get_time() / 1000000));
 
@@ -341,9 +341,9 @@ static esp_err_t handler_api_config_get(httpd_req_t *req)
     cJSON_AddStringToObject(data, "wifi_pass", cfg->wifi_pass[0] ? "****" : "");
     cJSON_AddStringToObject(data, "server_url", cfg->server_url);
     cJSON_AddStringToObject(data, "device_name", cfg->device_name);
-    cJSON_AddNumberToObject(data, "resolution", cfg->resolution);
+    cJSON_AddNumberToObject(data, "cam_framesize", cfg->resolution);
     cJSON_AddNumberToObject(data, "fps", cfg->fps);
-    cJSON_AddNumberToObject(data, "jpeg_quality", cfg->jpeg_quality);
+    cJSON_AddNumberToObject(data, "cam_quality", cfg->jpeg_quality);
     cJSON_AddStringToObject(data, "timezone", cfg->timezone);
     cJSON_AddNumberToObject(data, "motion_threshold", cfg->motion_threshold);
     cJSON_AddNumberToObject(data, "motion_cooldown", cfg->motion_cooldown);
@@ -424,11 +424,11 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
         strncpy(new_cfg.server_url, item->valuestring, sizeof(new_cfg.server_url) - 1);
     if ((item = cJSON_GetObjectItem(root, "device_name")) && cJSON_IsString(item))
         strncpy(new_cfg.device_name, item->valuestring, sizeof(new_cfg.device_name) - 1);
-    if ((item = cJSON_GetObjectItem(root, "resolution")) && cJSON_IsNumber(item))
+    if ((item = cJSON_GetObjectItem(root, "cam_framesize")) && cJSON_IsNumber(item))
         new_cfg.resolution = (uint8_t)item->valuedouble;
     if ((item = cJSON_GetObjectItem(root, "fps")) && cJSON_IsNumber(item))
         new_cfg.fps = (uint8_t)item->valuedouble;
-    if ((item = cJSON_GetObjectItem(root, "jpeg_quality")) && cJSON_IsNumber(item))
+    if ((item = cJSON_GetObjectItem(root, "cam_quality")) && cJSON_IsNumber(item))
         new_cfg.jpeg_quality = (uint8_t)item->valuedouble;
     if ((item = cJSON_GetObjectItem(root, "timezone")) && cJSON_IsString(item))
         strncpy(new_cfg.timezone, item->valuestring, sizeof(new_cfg.timezone) - 1);
