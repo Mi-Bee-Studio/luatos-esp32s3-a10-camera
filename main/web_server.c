@@ -211,8 +211,6 @@ static esp_err_t read_body(httpd_req_t *req, char **out, int *out_len)
 /*  Authentication helpers                                             */
 /* ------------------------------------------------------------------ */
 
-/* config_get_web_password() is declared in config_manager.h */
-extern const char *config_get_web_password(void);
 
 static bool check_auth(httpd_req_t *req)
 {
