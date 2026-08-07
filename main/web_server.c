@@ -3,14 +3,17 @@
  * REST API endpoints + SPIFFS static file serving for ESP32-S3-A10 camera.
  *
  * Endpoints:
- *   GET  /api/status   — device status JSON
- *   GET  /api/config   — current config JSON
- *   POST /api/config   — partial config update (auth required)
- *   POST /api/reset    — reset config to defaults (auth required)
- *   GET  /metrics      — Prometheus-format metrics
- *   GET  /capture      — single JPEG frame
- *   OPTIONS / *         - CORS preflight
- *   GET    / *          - SPIFFS static files
+ *   GET  /api/status       — device status JSON
+ *   GET  /api/config       — current config JSON
+ *   POST /api/config       — partial config update (auth required)
+ *   GET  /api/capabilities — board capability flags
+ *   GET  /api/capture      — single JPEG frame
+ *   GET  /api/scan         — WiFi AP scan
+ *   POST /api/reset        — reset config to defaults (auth required)
+ *   POST /api/reboot       — reboot device (auth required)
+ *   GET  /metrics          — Prometheus-format metrics
+ *   OPTIONS any-path     — CORS preflight
+ *   GET    any-path     — SPIFFS static files
  */
 
 #include "web_server.h"
@@ -108,36 +111,64 @@ static void ws_touch_client(int sockfd) {
 static void set_cors_headers(httpd_req_t *req)
 {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, X-Password");
     httpd_resp_set_hdr(req, "Access-Control-Max-Age", "86400");
 }
 
-static esp_err_t json_ok(httpd_req_t *req, cJSON *root)
+static esp_err_t json_ok(httpd_req_t *req, cJSON *data)
 {
-    set_cors_headers(req);
-    httpd_resp_set_type(req, "application/json");
-    char *out = cJSON_PrintUnformatted(root);
-    esp_err_t ret = httpd_resp_send(req, out, strlen(out));
-    free(out);
-    cJSON_Delete(root);
-    return ret;
-}
-
-static esp_err_t json_error(httpd_req_t *req, const char *msg, int code)
-{
-    set_cors_headers(req);
-    httpd_resp_set_status(req, "400 Bad Request");
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "error", msg);
-    httpd_resp_set_type(req, "application/json");
-    char *out = cJSON_PrintUnformatted(root);
-    esp_err_t ret = httpd_resp_send(req, out, strlen(out));
-    free(out);
+    if (!root) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_send(req, "JSON alloc failed", 17);
+        return ESP_FAIL;
+    }
+    cJSON_AddBoolToObject(root, "ok", true);
+    if (data) {
+        cJSON_AddItemToObject(root, "data", data);
+    }
+    char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
+    if (!json) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_send(req, "JSON print failed", 17);
+        return ESP_FAIL;
+    }
+    set_cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t ret = httpd_resp_send(req, json, strlen(json));
+    free(json);
     return ret;
 }
 
+static esp_err_t json_error(httpd_req_t *req, const char *msg, int status)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_send(req, "JSON alloc failed", 17);
+        return ESP_FAIL;
+    }
+    cJSON_AddBoolToObject(root, "ok", false);
+    cJSON_AddStringToObject(root, "error", msg);
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_send(req, "JSON print failed", 17);
+        return ESP_FAIL;
+    }
+    set_cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_status(req, (status == HTTPD_401_UNAUTHORIZED) ? "401 Unauthorized" :
+                           (status == HTTPD_404_NOT_FOUND) ? "404 Not Found" :
+                           (status == HTTPD_500_INTERNAL_SERVER_ERROR) ? "500 Internal Server Error" :
+                           "400 Bad Request");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    return ESP_FAIL;
+}
 
 /**
  * @brief Read the full request body into a malloc'd buffer.
@@ -177,6 +208,58 @@ static esp_err_t read_body(httpd_req_t *req, char **out, int *out_len)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Authentication helpers                                             */
+/* ------------------------------------------------------------------ */
+
+/* config_get_web_password() is declared in config_manager.h */
+extern const char *config_get_web_password(void);
+
+static bool check_auth(httpd_req_t *req)
+{
+    const char *stored_pass = config_get_web_password();
+    /* If no password is set, allow access (first-time setup) */
+    if (!stored_pass || stored_pass[0] == '\0') {
+        return true;
+    }
+
+    /* Check X-Password header */
+    char password[128];
+    size_t password_len = sizeof(password) - 1;
+    esp_err_t ret = httpd_req_get_hdr_value_str(req, "X-Password", password, password_len);
+    if (ret != ESP_OK) {
+        return false;
+    }
+    password[password_len] = '\0';
+
+    return strcmp(password, stored_pass) == 0;
+}
+
+static esp_err_t require_auth(httpd_req_t *req)
+{
+    const char *stored_pass = config_get_web_password();
+
+    /* State A: No password set — only POST /api/config with web_password field allowed */
+    if (!stored_pass || stored_pass[0] == '\0') {
+        return json_error(req, "SET_PASSWORD_FIRST", HTTPD_401_UNAUTHORIZED);
+    }
+
+    /* State B: Password is set — require X-Password header to match */
+    char password[128];
+    size_t password_len = sizeof(password) - 1;
+    esp_err_t ret = httpd_req_get_hdr_value_str(req, "X-Password", password, password_len);
+    if (ret != ESP_OK) {
+        return json_error(req, "unauthorized", HTTPD_401_UNAUTHORIZED);
+    }
+    password[password_len] = '\0';
+
+    if (strcmp(password, stored_pass) != 0) {
+        return json_error(req, "unauthorized", HTTPD_401_UNAUTHORIZED);
+    }
+
+    return ESP_OK;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Resolution helper                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -200,8 +283,8 @@ static esp_err_t handler_api_status(httpd_req_t *req)
     const cam_config_t *cfg = config_get();
     wifi_state_t ws = wifi_get_state();
 
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "wifi_ssid", cfg->wifi_ssid);
+    cJSON *data = cJSON_CreateObject();
+    cJSON_AddStringToObject(data, "wifi_ssid", cfg->wifi_ssid);
 
     const char *state_str = "unknown";
     switch (ws) {
@@ -211,40 +294,40 @@ static esp_err_t handler_api_status(httpd_req_t *req)
         case WIFI_STATE_STA_DISCONNECTED: state_str = "disconnected"; break;
         case WIFI_STATE_STA_FAILED:      state_str = "failed"; break;
     }
-    cJSON_AddStringToObject(root, "wifi_state", state_str);
-    cJSON_AddStringToObject(root, "ip", wifi_get_ip_str());
+    cJSON_AddStringToObject(data, "wifi_state", state_str);
+    cJSON_AddStringToObject(data, "ip", wifi_get_ip_str());
 
     if (ws == WIFI_STATE_STA_CONNECTED) {
         wifi_ap_record_t ap_info;
         if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
-            cJSON_AddNumberToObject(root, "wifi_rssi", ap_info.rssi);
-            cJSON_AddNumberToObject(root, "wifi_channel", ap_info.primary);
+            cJSON_AddNumberToObject(data, "wifi_rssi", ap_info.rssi);
+            cJSON_AddNumberToObject(data, "wifi_channel", ap_info.primary);
         }
     }
 
 #ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
-    cJSON_AddNumberToObject(root, "active_ssid_index", wifi_get_current_ssid_index());
+    cJSON_AddNumberToObject(data, "active_ssid_index", wifi_get_current_ssid_index());
 #endif
 
-    cJSON_AddStringToObject(root, "camera", camera_get_sensor_name());
-    cJSON_AddStringToObject(root, "resolution", res_to_str(cfg->resolution));
+    cJSON_AddStringToObject(data, "camera", camera_get_sensor_name());
+    cJSON_AddStringToObject(data, "resolution", res_to_str(cfg->resolution));
 
-    cJSON_AddNumberToObject(root, "uptime", (double)(esp_timer_get_time() / 1000000));
+    cJSON_AddNumberToObject(data, "uptime", (double)(esp_timer_get_time() / 1000000));
 
     float temp = get_chip_temp();
-    cJSON_AddNumberToObject(root, "chip_temp", temp);
+    cJSON_AddNumberToObject(data, "chip_temp", temp);
 
     size_t baseline_free = 0, baseline_min = 0;
     health_get_baselines(&baseline_free, &baseline_min);
     size_t current_free = esp_get_free_heap_size();
     size_t current_min = esp_get_minimum_free_heap_size();
     int heap_delta = (int)current_free - (int)baseline_free;
-    cJSON_AddNumberToObject(root, "heap_free", current_free);
-    cJSON_AddNumberToObject(root, "heap_min", current_min);
-    cJSON_AddNumberToObject(root, "heap_baseline", baseline_free);
-    cJSON_AddNumberToObject(root, "heap_delta", heap_delta);
+    cJSON_AddNumberToObject(data, "heap_free", current_free);
+    cJSON_AddNumberToObject(data, "heap_min", current_min);
+    cJSON_AddNumberToObject(data, "heap_baseline", baseline_free);
+    cJSON_AddNumberToObject(data, "heap_delta", heap_delta);
 
-    return json_ok(req, root);
+    return json_ok(req, data);
 }
 
 /* ------------------------------------------------------------------ */
@@ -255,27 +338,27 @@ static esp_err_t handler_api_config_get(httpd_req_t *req)
 {
     const cam_config_t *cfg = config_get();
 
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "wifi_ssid", cfg->wifi_ssid);
-    cJSON_AddStringToObject(root, "wifi_pass", cfg->wifi_pass[0] ? "****" : "");
-    cJSON_AddStringToObject(root, "server_url", cfg->server_url);
-    cJSON_AddStringToObject(root, "device_name", cfg->device_name);
-    cJSON_AddNumberToObject(root, "resolution", cfg->resolution);
-    cJSON_AddNumberToObject(root, "fps", cfg->fps);
-    cJSON_AddNumberToObject(root, "jpeg_quality", cfg->jpeg_quality);
-    cJSON_AddStringToObject(root, "timezone", cfg->timezone);
-    cJSON_AddNumberToObject(root, "motion_threshold", cfg->motion_threshold);
-    cJSON_AddNumberToObject(root, "motion_cooldown", cfg->motion_cooldown);
+    cJSON *data = cJSON_CreateObject();
+    cJSON_AddStringToObject(data, "wifi_ssid", cfg->wifi_ssid);
+    cJSON_AddStringToObject(data, "wifi_pass", cfg->wifi_pass[0] ? "****" : "");
+    cJSON_AddStringToObject(data, "server_url", cfg->server_url);
+    cJSON_AddStringToObject(data, "device_name", cfg->device_name);
+    cJSON_AddNumberToObject(data, "resolution", cfg->resolution);
+    cJSON_AddNumberToObject(data, "fps", cfg->fps);
+    cJSON_AddNumberToObject(data, "jpeg_quality", cfg->jpeg_quality);
+    cJSON_AddStringToObject(data, "timezone", cfg->timezone);
+    cJSON_AddNumberToObject(data, "motion_threshold", cfg->motion_threshold);
+    cJSON_AddNumberToObject(data, "motion_cooldown", cfg->motion_cooldown);
     // v3 fields
-    cJSON_AddStringToObject(root, "wifi_ssid2", cfg->wifi_ssid2);
-    cJSON_AddStringToObject(root, "wifi_pass2", cfg->wifi_pass2[0] ? "****" : "");
-    cJSON_AddStringToObject(root, "mdns_hostname", cfg->mdns_hostname);
-    cJSON_AddStringToObject(root, "webhook_url", cfg->webhook_url);
-    cJSON_AddStringToObject(root, "webhook_secret", cfg->webhook_secret[0] ? "****" : "");
-    cJSON_AddBoolToObject(root, "onvif_enabled", cfg->onvif_enabled);
-    cJSON_AddBoolToObject(root, "ws_enabled", cfg->ws_enabled);
+    cJSON_AddStringToObject(data, "wifi_ssid2", cfg->wifi_ssid2);
+    cJSON_AddStringToObject(data, "wifi_pass2", cfg->wifi_pass2[0] ? "****" : "");
+    cJSON_AddStringToObject(data, "mdns_hostname", cfg->mdns_hostname);
+    cJSON_AddStringToObject(data, "webhook_url", cfg->webhook_url);
+    cJSON_AddStringToObject(data, "webhook_secret", cfg->webhook_secret[0] ? "****" : "");
+    cJSON_AddBoolToObject(data, "onvif_enabled", cfg->onvif_enabled);
+    cJSON_AddBoolToObject(data, "ws_enabled", cfg->ws_enabled);
 
-    return json_ok(req, root);
+    return json_ok(req, data);
 }
 
 /* ------------------------------------------------------------------ */
@@ -287,13 +370,33 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
     char *body = NULL;
     int body_len = 0;
     if (read_body(req, &body, &body_len) != ESP_OK) {
-        return json_error(req, "Failed to read body", 400);
+        return json_error(req, "Failed to read body", HTTPD_400_BAD_REQUEST);
     }
 
     cJSON *root = cJSON_Parse(body);
     free(body);
     if (!root) {
-        return json_error(req, "Invalid JSON", 400);
+        return json_error(req, "Invalid JSON", HTTPD_400_BAD_REQUEST);
+    }
+
+    /* Auth state machine */
+    const char *stored_pass = config_get_web_password();
+    bool password_empty = !stored_pass || stored_pass[0] == '\0';
+
+    if (password_empty) {
+        /* State A: only allow if body contains web_password field */
+        cJSON *pw = cJSON_GetObjectItem(root, "web_password");
+        if (!pw || !cJSON_IsString(pw) || !pw->valuestring[0]) {
+            cJSON_Delete(root);
+            return json_error(req, "SET_PASSWORD_FIRST", HTTPD_401_UNAUTHORIZED);
+        }
+        /* Fall through — config_save will save the password */
+    } else {
+        /* State B: require X-Password header */
+        if (!check_auth(req)) {
+            cJSON_Delete(root);
+            return json_error(req, "unauthorized", HTTPD_401_UNAUTHORIZED);
+        }
     }
 
     /* Snapshot old config for change detection */
@@ -354,6 +457,8 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
         new_cfg.onvif_enabled = (uint8_t)item->valuedouble;
     if ((item = cJSON_GetObjectItem(root, "ws_enabled")) && cJSON_IsNumber(item))
         new_cfg.ws_enabled = (uint8_t)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(root, "web_password")) && cJSON_IsString(item))
+        strncpy(new_cfg.web_password, item->valuestring, sizeof(new_cfg.web_password) - 1);
 
     cJSON_Delete(root);
 
@@ -365,7 +470,7 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
 
     esp_err_t err = config_save(&new_cfg);
     if (err != ESP_OK) {
-        return json_error(req, "Failed to save config", 400);
+        return json_error(req, "Failed to save config", HTTPD_500_INTERNAL_SERVER_ERROR);
     }
 
     /* --- Live-apply: camera settings --- */
@@ -412,7 +517,6 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
     }
 
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "success", true);
     cJSON_AddStringToObject(resp, "message", message[0] ? message : "Config updated");
     if (camera_applied) {
         cJSON_AddStringToObject(resp, "applied", "camera");
@@ -424,16 +528,19 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
 /*  POST /api/reset                                                    */
 /* ------------------------------------------------------------------ */
 
-static esp_err_t handler_api_reset(httpd_req_t *req)
+static esp_err_t handler_reset(httpd_req_t *req)
 {
+    esp_err_t ret = require_auth(req);
+    if (ret != ESP_OK) {
+        return ret;
+    }
 
     esp_err_t err = config_reset();
     if (err != ESP_OK) {
-        return json_error(req, "Failed to reset config", 400);
+        return json_error(req, "Failed to reset config", HTTPD_500_INTERNAL_SERVER_ERROR);
     }
 
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "success", true);
     cJSON_AddStringToObject(resp, "message", "Config reset to defaults");
     return json_ok(req, resp);
 }
@@ -442,10 +549,14 @@ static esp_err_t handler_api_reset(httpd_req_t *req)
 /*  POST /api/reboot  (device reboot)                                  */
 /* ------------------------------------------------------------------ */
 
-static esp_err_t handler_api_reboot(httpd_req_t *req)
+static esp_err_t handler_reboot(httpd_req_t *req)
 {
+    esp_err_t ret = require_auth(req);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "success", true);
     cJSON_AddStringToObject(resp, "message", "Rebooting...");
     json_ok(req, resp);
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -453,8 +564,52 @@ static esp_err_t handler_api_reboot(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ------------------------------------------------------------------ */
+/*  GET /api/capabilities                                              */
+/* ------------------------------------------------------------------ */
+
+static esp_err_t handler_capabilities(httpd_req_t *req)
+{
+    cJSON *data = cJSON_CreateObject();
+    if (!data) {
+        return json_error(req, "Out of memory", HTTPD_500_INTERNAL_SERVER_ERROR);
+    }
+
+    /* Per-board capability matrix (luatos-esp32s3-a10-camera) */
+    cJSON_AddBoolToObject(data, "ai",        false);
+    cJSON_AddBoolToObject(data, "sd",        false);
+    cJSON_AddBoolToObject(data, "audio",     false);
+    cJSON_AddBoolToObject(data, "ota",       false);
+    cJSON_AddBoolToObject(data, "mic",       false);
+    cJSON_AddBoolToObject(data, "flash_led", false);
+    cJSON_AddBoolToObject(data, "recording", false);
+    cJSON_AddBoolToObject(data, "timelapse", false);
+#ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
+    cJSON_AddBoolToObject(data, "onvif",     true);
+#else
+    cJSON_AddBoolToObject(data, "onvif",     false);
+#endif
+    cJSON_AddBoolToObject(data, "rtsp",      false);
+#ifdef CONFIG_MIBEECAM_ENABLE_WS
+    cJSON_AddBoolToObject(data, "websocket", true);
+#else
+    cJSON_AddBoolToObject(data, "websocket", false);
+#endif
+#ifdef CONFIG_MIBEECAM_ENABLE_MDNS
+    cJSON_AddBoolToObject(data, "mdns",      true);
+#else
+    cJSON_AddBoolToObject(data, "mdns",      false);
+#endif
+
+    return json_ok(req, data);
+}
+
 #ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
-static esp_err_t handler_api_wifi_scan(httpd_req_t *req)
+/* ------------------------------------------------------------------ */
+/*  GET /api/scan                                                      */
+/* ------------------------------------------------------------------ */
+
+static esp_err_t handler_scan(httpd_req_t *req)
 {
     // Allocate scan results (max 20 networks)
     #define MAX_SCAN_RESULTS 20
@@ -463,11 +618,7 @@ static esp_err_t handler_api_wifi_scan(httpd_req_t *req)
 
     esp_err_t ret = wifi_scan(ap_records, MAX_SCAN_RESULTS, &found);
     if (ret != ESP_OK) {
-        cJSON *err = cJSON_CreateObject();
-        cJSON_AddStringToObject(err, "error", "scan_failed");
-        cJSON_AddStringToObject(err, "detail", esp_err_to_name(ret));
-        httpd_resp_set_status(req, "503 Service Unavailable");
-        return json_ok(req, err);
+        return json_error(req, esp_err_to_name(ret), HTTPD_500_INTERNAL_SERVER_ERROR);
     }
 
     // Sort by RSSI descending (simple bubble sort for small arrays)
@@ -482,16 +633,19 @@ static esp_err_t handler_api_wifi_scan(httpd_req_t *req)
     }
 
     // Build JSON array (no BSSID for privacy)
-    cJSON *root = cJSON_CreateArray();
+    cJSON *networks = cJSON_CreateArray();
     for (int i = 0; i < found; i++) {
         cJSON *net = cJSON_CreateObject();
         cJSON_AddStringToObject(net, "ssid", (char *)ap_records[i].ssid);
         cJSON_AddNumberToObject(net, "rssi", ap_records[i].rssi);
         cJSON_AddNumberToObject(net, "auth", ap_records[i].authmode);
         cJSON_AddNumberToObject(net, "channel", ap_records[i].primary);
-        cJSON_AddItemToArray(root, net);
+        cJSON_AddItemToArray(networks, net);
     }
-    return json_ok(req, root);
+
+    cJSON *data = cJSON_CreateObject();
+    cJSON_AddItemToObject(data, "networks", networks);
+    return json_ok(req, data);
 }
 #endif
 
@@ -559,7 +713,7 @@ static esp_err_t handler_metrics(httpd_req_t *req)
 }
 
 /* ------------------------------------------------------------------ */
-/*  GET /capture                                                       */
+/*  GET /api/capture                                                   */
 /* ------------------------------------------------------------------ */
 
 static esp_err_t handler_capture(httpd_req_t *req)
@@ -779,6 +933,7 @@ static void ws_event_handler(const event_t *event, void *user_data)
     ws_broadcast_text(json_buf, strlen(json_buf));
 }
 #endif
+
 /* ------------------------------------------------------------------ */
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
@@ -823,39 +978,44 @@ esp_err_t web_server_start(uint16_t port)
         .handler  = handler_api_config_post,
         .user_ctx = NULL,
     };
+    const httpd_uri_t api_capabilities = {
+        .uri      = "/api/capabilities",
+        .method   = HTTP_GET,
+        .handler  = handler_capabilities,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t api_capture = {
+        .uri      = "/api/capture",
+        .method   = HTTP_GET,
+        .handler  = handler_capture,
+        .user_ctx = NULL,
+    };
     const httpd_uri_t api_reset = {
         .uri      = "/api/reset",
         .method   = HTTP_POST,
-        .handler  = handler_api_reset,
+        .handler  = handler_reset,
         .user_ctx = NULL,
     };
     const httpd_uri_t api_reboot = {
         .uri      = "/api/reboot",
         .method   = HTTP_POST,
-        .handler  = handler_api_reboot,
+        .handler  = handler_reboot,
         .user_ctx = NULL,
     };
+#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
+    const httpd_uri_t api_scan = {
+        .uri      = "/api/scan",
+        .method   = HTTP_GET,
+        .handler  = handler_scan,
+        .user_ctx = NULL,
+    };
+#endif
     const httpd_uri_t metrics = {
         .uri      = "/metrics",
         .method   = HTTP_GET,
         .handler  = handler_metrics,
         .user_ctx = NULL,
     };
-    const httpd_uri_t capture = {
-        .uri      = "/capture",
-        .method   = HTTP_GET,
-        .handler  = handler_capture,
-        .user_ctx = NULL,
-    };
-#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
-    const httpd_uri_t api_wifi_scan = {
-        .uri      = "/api/wifi/scan",
-        .method   = HTTP_GET,
-        .handler  = handler_api_wifi_scan,
-        .user_ctx = NULL,
-    };
-#endif
-
     const httpd_uri_t options_any = {
         .uri      = "/*",
         .method   = HTTP_OPTIONS,
@@ -872,13 +1032,16 @@ esp_err_t web_server_start(uint16_t port)
     httpd_register_uri_handler(s_server, &api_status);
     httpd_register_uri_handler(s_server, &api_config_get);
     httpd_register_uri_handler(s_server, &api_config_post);
+    httpd_register_uri_handler(s_server, &api_capabilities);
+    httpd_register_uri_handler(s_server, &api_capture);
     httpd_register_uri_handler(s_server, &api_reset);
     httpd_register_uri_handler(s_server, &api_reboot);
-    httpd_register_uri_handler(s_server, &metrics);
-    httpd_register_uri_handler(s_server, &capture);
 #ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
-    httpd_register_uri_handler(s_server, &api_wifi_scan);
+    httpd_register_uri_handler(s_server, &api_scan);
 #endif
+    httpd_register_uri_handler(s_server, &metrics);
+    httpd_register_uri_handler(s_server, &options_any);
+    httpd_register_uri_handler(s_server, &static_any);
 
 #ifdef CONFIG_MIBEECAM_ENABLE_WS
     ws_clients_init();
@@ -890,9 +1053,7 @@ esp_err_t web_server_start(uint16_t port)
         .handle_ws_control_frames = true,
     };
     httpd_register_uri_handler(s_server, &uri_ws);
-#endif
 
-#ifdef CONFIG_MIBEECAM_ENABLE_WS
     event_bus_subscribe(EVENT_MOTION_DETECTED, ws_event_handler, NULL, NULL);
     event_bus_subscribe(EVENT_MOTION_END, ws_event_handler, NULL, NULL);
     event_bus_subscribe(EVENT_WIFI_STATE_CHANGED, ws_event_handler, NULL, NULL);
@@ -904,9 +1065,6 @@ esp_err_t web_server_start(uint16_t port)
     event_bus_subscribe(EVENT_UPLOAD_FAILED, ws_event_handler, NULL, NULL);
     ESP_LOGI(TAG, "WS event subscriptions registered");
 #endif
-
-    httpd_register_uri_handler(s_server, &options_any);
-    httpd_register_uri_handler(s_server, &static_any);
 
     ESP_LOGI(TAG, "Web server started on port %d", port);
     return ESP_OK;
