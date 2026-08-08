@@ -933,6 +933,108 @@ static void ws_event_handler(const event_t *event, void *user_data)
 #endif
 
 /* ------------------------------------------------------------------ */
+/*  Unified API endpoints (ported from esp32s3-n16r8-cam)             */
+/* ------------------------------------------------------------------ */
+
+/* GET /api/camera — current camera settings (mapped to SPA field names) */
+static esp_err_t handler_api_camera_get(httpd_req_t *req)
+{
+    const cam_config_t *cfg = config_get();
+    cJSON *data = cJSON_CreateObject();
+    if (!data)
+        return json_error(req, "alloc failed", HTTPD_500_INTERNAL_SERVER_ERROR);
+
+    /* Persisted fields (luatos config uses resolution/jpeg_quality, no vflip) */
+    cJSON_AddNumberToObject(data, "cam_framesize", (double)cfg->resolution);
+    cJSON_AddNumberToObject(data, "cam_quality",   (double)cfg->jpeg_quality);
+    cJSON_AddNumberToObject(data, "cam_vflip",     0);
+
+    /* Sensor-only fields not persisted on this board — defaults match OV2640 power-on */
+    cJSON_AddNumberToObject(data, "cam_brightness", 0);
+    cJSON_AddNumberToObject(data, "cam_contrast",   0);
+    cJSON_AddNumberToObject(data, "cam_saturation", 0);
+    cJSON_AddNumberToObject(data, "cam_sharpness",  0);
+    cJSON_AddBoolToObject(data,   "cam_hmirror",    false);
+
+    return json_ok(req, data);
+}
+
+/* POST /api/camera — update camera settings (resolution + quality persisted, rest accepted) */
+static esp_err_t handler_api_camera_post(httpd_req_t *req)
+{
+    esp_err_t auth = require_auth(req);
+    if (auth != ESP_OK)
+        return json_error(req, "UNAUTHORIZED", HTTPD_401_UNAUTHORIZED);
+
+    char *body = NULL;
+    int body_len = 0;
+    if (read_body(req, &body, &body_len) != ESP_OK || !body)
+        return json_error(req, "empty body", HTTPD_400_BAD_REQUEST);
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json)
+        return json_error(req, "invalid JSON", HTTPD_400_BAD_REQUEST);
+
+    const cam_config_t *cfg = config_get();
+    cam_config_t newcfg = *cfg;
+
+    cJSON *fs = cJSON_GetObjectItem(json, "cam_framesize");
+    if (fs && cJSON_IsNumber(fs))
+        newcfg.resolution = (uint8_t)fs->valuedouble;
+
+    cJSON *q = cJSON_GetObjectItem(json, "cam_quality");
+    if (q && cJSON_IsNumber(q))
+        newcfg.jpeg_quality = (uint8_t)q->valuedouble;
+
+    /* cam_vflip / cam_brightness / cam_contrast / cam_saturation / cam_sharpness
+     * / cam_hmirror are accepted but not persisted — this board has no sensor
+     * override support. Sensor defaults apply on (re)init. */
+    cJSON_Delete(json);
+
+    esp_err_t ret = config_save(&newcfg);
+    if (ret != ESP_OK)
+        return json_error(req, "save failed", HTTPD_500_INTERNAL_SERVER_ERROR);
+
+    /* Attempt live camera reinit — non-fatal if it fails (settings apply on reboot) */
+    camera_deinit();
+    ret = camera_init(newcfg.resolution, newcfg.fps, newcfg.jpeg_quality);
+    if (ret != ESP_OK)
+        ESP_LOGW(TAG, "camera reinit failed after config save: %s", esp_err_to_name(ret));
+
+    cJSON *data = cJSON_CreateObject();
+    cJSON_AddStringToObject(data, "status", ret == ESP_OK ? "applied" : "saved (reboot to apply)");
+    return json_ok(req, data);
+}
+
+/* GET /api/led — flash LED state (this board has no flash LED, always off) */
+static esp_err_t handler_api_led_get(httpd_req_t *req)
+{
+    cJSON *data = cJSON_CreateObject();
+    if (!data)
+        return json_error(req, "alloc failed", HTTPD_500_INTERNAL_SERVER_ERROR);
+    cJSON_AddBoolToObject(data, "on", false);
+    return json_ok(req, data);
+}
+
+/* GET /api/ai/status — AI detection results (board has no AI, return empty shape) */
+static esp_err_t handler_api_ai_status(httpd_req_t *req)
+{
+    cJSON *data = cJSON_CreateObject();
+    cJSON *face = cJSON_CreateObject();
+    cJSON_AddItemToObject(face, "boxes", cJSON_CreateArray());
+    cJSON_AddItemToObject(data, "face", face);
+    cJSON *motion = cJSON_CreateObject();
+    cJSON_AddNumberToObject(motion, "score", 0);
+    cJSON_AddBoolToObject(motion, "detected", false);
+    cJSON_AddItemToObject(data, "motion", motion);
+    cJSON *qr = cJSON_CreateObject();
+    cJSON_AddStringToObject(qr, "text", "");
+    cJSON_AddItemToObject(data, "qr", qr);
+    return json_ok(req, data);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -945,7 +1047,7 @@ esp_err_t web_server_start(uint16_t port)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = port;
-    config.max_uri_handlers = 20;
+    config.max_uri_handlers = 30;  /* was 20 — headroom for new unified API endpoints */
     config.stack_size = 8192;
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 30;
@@ -1026,6 +1128,30 @@ esp_err_t web_server_start(uint16_t port)
         .handler  = handler_static,
         .user_ctx = NULL,
     };
+    const httpd_uri_t api_camera_get = {
+        .uri      = "/api/camera",
+        .method   = HTTP_GET,
+        .handler  = handler_api_camera_get,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t api_camera_post = {
+        .uri      = "/api/camera",
+        .method   = HTTP_POST,
+        .handler  = handler_api_camera_post,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t api_led_get = {
+        .uri      = "/api/led",
+        .method   = HTTP_GET,
+        .handler  = handler_api_led_get,
+        .user_ctx = NULL,
+    };
+    const httpd_uri_t api_ai_status = {
+        .uri      = "/api/ai/status",
+        .method   = HTTP_GET,
+        .handler  = handler_api_ai_status,
+        .user_ctx = NULL,
+    };
 
     httpd_register_uri_handler(s_server, &api_status);
     httpd_register_uri_handler(s_server, &api_config_get);
@@ -1040,6 +1166,10 @@ esp_err_t web_server_start(uint16_t port)
     httpd_register_uri_handler(s_server, &metrics);
     httpd_register_uri_handler(s_server, &options_any);
     httpd_register_uri_handler(s_server, &static_any);
+    httpd_register_uri_handler(s_server, &api_camera_get);
+    httpd_register_uri_handler(s_server, &api_camera_post);
+    httpd_register_uri_handler(s_server, &api_led_get);
+    httpd_register_uri_handler(s_server, &api_ai_status);
 
 #ifdef CONFIG_MIBEECAM_ENABLE_WS
     ws_clients_init();

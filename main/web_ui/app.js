@@ -114,6 +114,21 @@ function initTabs() {
     });
 }
 
+/* ---------- 5b. Device capabilities (fetched once, gates polling) ---------- */
+
+const deviceCaps = { ai: false, sd: false, audio: false, ota: false, mic: false,
+                   flash_led: false, recording: false, timelapse: false,
+                   onvif: false, rtsp: false, websocket: false, mdns: false };
+
+async function loadCapabilities() {
+    try {
+        const data = await api('/api/capabilities');
+        Object.assign(deviceCaps, data);
+    } catch (e) {
+        /* Capabilities unknown — assume nothing supported, stay safe */
+    }
+}
+
 /* ---------- 6. /status polling (500ms) ---------- */
 
 async function pollStatus() {
@@ -150,6 +165,7 @@ async function pollStatus() {
 /* ---------- 7. AI overlay from /ai/status (500ms) ---------- */
 
 async function pollAI() {
+    if (!deviceCaps.ai) return;  /* board has no AI — stop hammering /api/ai/status */
     try {
         const data = await api('/api/ai/status');
         const canvas = document.getElementById('stream-overlay');
@@ -475,10 +491,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* Initial data load */
     loadCamera();
+    loadCapabilities();
 
     /* Polling loops */
     pollStatus();
     pollAI();
-    setInterval(pollStatus, 500);
-    setInterval(pollAI, 500);
+    setInterval(pollStatus, 2000);  /* was 500ms — httpd is single-threaded, high polling kills it */
+    setInterval(pollAI, 1000);     /* gated by deviceCaps.ai inside pollAI() */
 });
