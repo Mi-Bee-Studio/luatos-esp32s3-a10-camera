@@ -9,6 +9,8 @@
 #include <string.h>
 #include <time.h>
 #include "event_bus.h"
+#include "lwip/sockets.h"
+#include "lwip/inet.h"
 
 static const char *TAG = "health_monitor";
 
@@ -18,6 +20,41 @@ static time_t last_temp_read = 0;
 static const time_t temp_cache_duration = 5; // 5 seconds
 
 static TaskHandle_t health_task_handle = NULL;
+
+/* httpd :80 self-heal probe — sends a real HTTP request to localhost:80.
+ * TCP connect alone is insufficient: LWIP accepts connections even when
+ * httpd has no free worker. Only a real request proves the event loop is alive. */
+static bool probe_httpd_port80(void)
+{
+    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock < 0) return false;
+
+    struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in dest = {
+        .sin_family = AF_INET,
+        .sin_port   = htons(80),
+        .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+    };
+
+    bool ok = false;
+    if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) == 0) {
+        static const char req[] =
+            "GET /api/status HTTP/1.0\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Connection: close\r\n\r\n";
+        if (send(sock, req, sizeof(req) - 1, 0) > 0) {
+            char buf[32];
+            int n = recv(sock, buf, sizeof(buf), 0);
+            ok = (n > 0);
+        }
+    }
+    close(sock);
+    return ok;
+}
+
 
 static size_t s_baseline_free_heap = 0;
 static size_t s_baseline_min_heap = 0;
@@ -92,6 +129,20 @@ static void health_monitor_task(void *pvParameters) {
         for (UBaseType_t i = 0; i < task_count; i++) {
             ESP_LOGD(TAG, "  %s: %u bytes free", task_stats[i].pcTaskName,
                      (unsigned)uxTaskGetStackHighWaterMark(task_stats[i].xHandle) * sizeof(StackType_t));
+        }
+
+        /* httpd :80 self-heal: probe every cycle (30s).
+         * 4 consecutive failures (120s unresponsive) → reboot. */
+        static int httpd_stuck_count = 0;
+        if (!probe_httpd_port80()) {
+            httpd_stuck_count++;
+            ESP_LOGW(TAG, "httpd :80 probe failed (%d/4)", httpd_stuck_count);
+            if (httpd_stuck_count >= 4) {
+                ESP_LOGE(TAG, "httpd :80 unresponsive for 120s — rebooting");
+                esp_restart();
+            }
+        } else {
+            httpd_stuck_count = 0;
         }
         
         vTaskDelay(pdMS_TO_TICKS(30000)); // 30 seconds
