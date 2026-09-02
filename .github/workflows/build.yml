@@ -164,13 +164,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create ${{ github.ref_name }} \
-            firmware/bootloader.bin \
+          ASSETS="firmware/bootloader.bin \
             firmware/partition-table.bin \
             firmware/firmware.bin \
             firmware/spiffs.bin \
             flash_all.sh \
             flash_all.bat \
-            checksums.txt \
-            --title "MiBeeCam ${{ github.ref_name }}" \
-            --notes-file RELEASE_NOTES.md
+            checksums.txt"
+          if gh release view ${{ github.ref_name }} > /dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} already exists — uploading/clobbering assets"
+            gh release upload ${{ github.ref_name }} $ASSETS --clobber
+          else
+            gh release create ${{ github.ref_name }} \
+              $ASSETS \
+              --title "MiBeeCam ${{ github.ref_name }}" \
+              --notes-file RELEASE_NOTES.md
+          fi
