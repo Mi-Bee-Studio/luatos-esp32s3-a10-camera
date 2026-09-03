@@ -48,7 +48,7 @@ No cloud dependencies. No subscription. Just a WiFi camera that works on your LA
 
 | Icon | Feature | Description |
 |------|---------|-------------|
-| 📷 | **Camera Capture** | OV2640 sensor (8225N), default VGA (640×480), supports SVGA/XGA/UXGA, JPEG output |
+| 📷 | **Camera Capture** | OV2640 sensor (8225N), VGA (640×480) only — larger sizes exhaust the PSRAM-less DRAM frame budget (PIT-012/021), firmware rejects them |
 | 🌐 | **WiFi Management** | STA mode with auto-reconnect, AP hotspot fallback for first-time setup |
 | 🎨 | **Web Interface** | Dashboard, live MJPEG preview, and configuration pages served from SPIFFS |
 | 📺 | **MJPEG Streaming** | Real-time video at up to 15 FPS via independent TCP server (port 81), up to 2 concurrent clients |
@@ -258,7 +258,7 @@ All settings are stored in NVS and managed via the web UI or REST API:
 
 | Parameter | Default | Range | Description |
 |-----------|---------|-------|-------------|
-| Resolution | VGA (0) | 0=VGA, 1=SVGA, 2=XGA, 3=UXGA | Camera output resolution |
+| Resolution | VGA (0) | 0=VGA (this board is locked to VGA; larger sizes return 400) | Camera output resolution |
 | FPS | 15 | 1–30 | Target frames per second |
 | JPEG Quality | 12 | 1–63 (lower = better) | JPEG compression quality |
 | Motion Threshold | 5 | 1–255 | Sensitivity of motion detection |

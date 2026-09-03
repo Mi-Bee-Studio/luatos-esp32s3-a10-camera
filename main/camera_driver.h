@@ -24,6 +24,14 @@ typedef enum {
     CAMERA_RES_MAX
 } camera_resolution_t;
 
+/* JPEG quality bounds (lower = better quality / larger frames). The driver
+ * sizes JPEG frame buffers at width*height/5; quality < 10 regularly exceeds
+ * that budget (VGA fb = 61KB) and produces truncated frames. With no PSRAM
+ * (DRAM-only, fb_count=1) oversized frames also pressure the heap spiral
+ * documented in AGENTS.md. Measured 2026-09-04: VGA q10 = ~13KB typical. */
+#define CAMERA_QUALITY_MIN 10
+#define CAMERA_QUALITY_MAX 63
+
 /**
  * Initialize the OV2640 camera with the given parameters.
  *

@@ -358,6 +358,7 @@ static esp_err_t handler_api_config_get(httpd_req_t *req)
     cJSON_AddNumberToObject(data, "cam_framesize", cfg->resolution);
     cJSON_AddNumberToObject(data, "fps", cfg->fps);
     cJSON_AddNumberToObject(data, "cam_quality", cfg->jpeg_quality);
+    /* 契约扩展（2026-09-04）：画质滑杆边界由板端声明，前端据此钳制输入 */
     cJSON_AddStringToObject(data, "timezone", cfg->timezone);
     cJSON_AddNumberToObject(data, "motion_threshold", cfg->motion_threshold);
     cJSON_AddNumberToObject(data, "motion_cooldown", cfg->motion_cooldown);
@@ -438,12 +439,29 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
         strncpy(new_cfg.server_url, item->valuestring, sizeof(new_cfg.server_url) - 1);
     if ((item = cJSON_GetObjectItem(root, "device_name")) && cJSON_IsString(item))
         strncpy(new_cfg.device_name, item->valuestring, sizeof(new_cfg.device_name) - 1);
-    if ((item = cJSON_GetObjectItem(root, "cam_framesize")) && cJSON_IsNumber(item))
-        new_cfg.resolution = (uint8_t)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(root, "cam_framesize")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        /* 同 /api/camera 的实测封禁：>VGA 在本板触发堆枯竭螺旋（fb_count=1 DRAM） */
+        if (val != 0) {
+            cJSON_Delete(root);
+            return json_error(req, "cam_framesize: this board supports VGA only (DRAM constraint)",
+                             HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.resolution = (uint8_t)val;
+    }
     if ((item = cJSON_GetObjectItem(root, "fps")) && cJSON_IsNumber(item))
         new_cfg.fps = (uint8_t)item->valuedouble;
-    if ((item = cJSON_GetObjectItem(root, "cam_quality")) && cJSON_IsNumber(item))
-        new_cfg.jpeg_quality = (uint8_t)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(root, "cam_quality")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val < CAMERA_QUALITY_MIN || val > CAMERA_QUALITY_MAX) {
+            char msg[80];
+            snprintf(msg, sizeof(msg), "cam_quality out of range (%d-%d)",
+                     CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
+            cJSON_Delete(root);
+            return json_error(req, msg, HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.jpeg_quality = (uint8_t)val;
+    }
     if ((item = cJSON_GetObjectItem(root, "timezone")) && cJSON_IsString(item))
         strncpy(new_cfg.timezone, item->valuestring, sizeof(new_cfg.timezone) - 1);
     if ((item = cJSON_GetObjectItem(root, "motion_threshold")) && cJSON_IsNumber(item))
@@ -491,55 +509,33 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
         return json_error(req, "Failed to save config", HTTPD_500_INTERNAL_SERVER_ERROR);
     }
 
-    /* --- Live-apply: camera settings --- */
-    char message[128] = "";
-    bool camera_applied = false;
-
-    if (new_cfg.resolution != old_resolution ||
-        new_cfg.fps != old_fps ||
-        new_cfg.jpeg_quality != old_jpeg_quality) {
-        bool motion_was_running = motion_detect_is_running();
-        ESP_LOGI(TAG, "Camera settings changed, reinitializing...");
-        mjpeg_streamer_stop();
-        if (motion_was_running) {
-            motion_detect_stop();
-        }
-        vTaskDelay(pdMS_TO_TICKS(500));
-        camera_deinit();
-        err = camera_init((camera_resolution_t)new_cfg.resolution,
-                          new_cfg.fps, new_cfg.jpeg_quality);
-        if (err == ESP_OK) {
-            ESP_LOGI(TAG, "Camera reinitialized with new settings");
-            camera_applied = true;
-            if (motion_was_running) {
-                motion_detect_start();
-            }
-            mjpeg_streamer_start();
-        } else {
-            ESP_LOGE(TAG, "Camera reinit failed: %s", esp_err_to_name(err));
-            snprintf(message, sizeof(message), "Camera reinit failed");
-        }
-    }
+    /* --- Camera settings: save + reboot to apply --- */
+    /* 2026-09-03/04 实测：热重配（camera_deinit+init）在 MJPEG/motion/广播
+     * 生产者并发取帧时导致设备级静默死亡（fb_count=1 DRAM，无 PSRAM）。
+     * /api/camera 已改为重启应用；本端点此前仍走热重配（2026-09-04 发现的
+     * 漏网之鱼）——现与 /api/camera 对齐：保存 + 应答 + 1s 后重启。
+     * 重启是干净的锤子，零竞态（姐妹板 PSRAM fb_count=2 不受此限）。 */
+    bool camera_changed = (new_cfg.resolution != old_resolution ||
+                           new_cfg.fps != old_fps ||
+                           new_cfg.jpeg_quality != old_jpeg_quality);
 
     /* --- WiFi change detection --- */
-    if (strcmp(new_cfg.wifi_ssid, old_wifi_ssid) != 0 ||
-        strcmp(new_cfg.wifi_pass, old_wifi_pass) != 0) {
-        if (message[0]) {
-            size_t len = strlen(message);
-            snprintf(message + len, sizeof(message) - len,
-                     "; WiFi settings changed, reboot required");
-        } else {
-            snprintf(message, sizeof(message),
-                     "WiFi settings changed, reboot required");
-        }
-    }
+    bool wifi_changed = (strcmp(new_cfg.wifi_ssid, old_wifi_ssid) != 0 ||
+                         strcmp(new_cfg.wifi_pass, old_wifi_pass) != 0);
 
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "message", message[0] ? message : "Config updated");
-    if (camera_applied) {
-        cJSON_AddStringToObject(resp, "applied", "camera");
+    cJSON_AddStringToObject(resp, "message",
+        camera_changed ? "Camera settings saved (rebooting to apply)"
+        : wifi_changed ? "WiFi settings changed, reboot required"
+        : "Config updated");
+    cJSON_AddBoolToObject(resp, "rebooting", camera_changed);
+    esp_err_t send_ret = json_ok(req, resp);
+    if (camera_changed) {
+        ESP_LOGW(TAG, "Camera config changed via /api/config — rebooting to apply");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        esp_restart();
     }
-    return json_ok(req, resp);
+    return send_ret;
 }
 
 /* ------------------------------------------------------------------ */
@@ -978,6 +974,9 @@ static esp_err_t handler_api_camera_get(httpd_req_t *req)
     cJSON_AddStringToObject(data, "resolution", res_to_str(cfg->resolution));
     cJSON_AddNumberToObject(data, "cam_framesize", (double)cfg->resolution);
     cJSON_AddNumberToObject(data, "cam_quality",   (double)cfg->jpeg_quality);
+    /* 契约扩展（2026-09-04）：画质滑杆边界由板端声明，前端据此钳制输入 */
+    cJSON_AddNumberToObject(data, "quality_min",   (double)CAMERA_QUALITY_MIN);
+    cJSON_AddNumberToObject(data, "quality_max",   (double)CAMERA_QUALITY_MAX);
 
     /* 2026-09-03 实测封禁 >VGA：SVGA 使 cam_hal DMA 池 61KB→96KB（800×600/5），
      * 空闲堆 45K→16K，暗光大帧再挤压 → 每秒分配失败、httpd 拒连、流 16s 断连螺旋。
@@ -1030,8 +1029,17 @@ static esp_err_t handler_api_camera_post(httpd_req_t *req)
     }
 
     cJSON *q = cJSON_GetObjectItem(json, "cam_quality");
-    if (q && cJSON_IsNumber(q))
-        newcfg.jpeg_quality = (uint8_t)q->valuedouble;
+    if (q && cJSON_IsNumber(q)) {
+        int val = (int)q->valuedouble;
+        if (val < CAMERA_QUALITY_MIN || val > CAMERA_QUALITY_MAX) {
+            char msg[80];
+            snprintf(msg, sizeof(msg), "cam_quality out of range (%d-%d)",
+                     CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
+            cJSON_Delete(json);
+            return json_error(req, msg, HTTPD_400_BAD_REQUEST);
+        }
+        newcfg.jpeg_quality = (uint8_t)val;
+    }
 
     /* cam_vflip / cam_brightness / cam_contrast / cam_saturation / cam_sharpness
      * / cam_hmirror are accepted but not persisted — this board has no sensor
