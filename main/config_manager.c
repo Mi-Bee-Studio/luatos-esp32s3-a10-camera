@@ -61,7 +61,7 @@ static const cam_config_t s_default_config = {
     .resolution = 0,         // VGA
     .fps = 15,
     .jpeg_quality = 12,
-    .web_password = "",
+    .web_password = "***REMOVED-DEFAULT-PASSWORD***",   /* 契约 v1.1 家族统一默认 */
     .timezone = CONFIG_DEFAULT_TIMEZONE,
     .motion_threshold = 5,
     .motion_cooldown = 10,
@@ -355,6 +355,10 @@ static esp_err_t config_migrate_v2_to_v3(cam_config_t *config)
     config->fps = old_cfg.fps;
     config->jpeg_quality = old_cfg.jpeg_quality;
     strncpy(config->web_password, old_cfg.web_password, sizeof(config->web_password) - 1);
+    /* 契约 v1.1：空密码迁移到家族统一默认（服务端已拒绝空密码写入） */
+    if (config->web_password[0] == '\0') {
+        strncpy(config->web_password, "***REMOVED-DEFAULT-PASSWORD***", sizeof(config->web_password) - 1);
+    }
     config->web_password[sizeof(config->web_password) - 1] = '\0';
     strncpy(config->timezone, old_cfg.timezone, sizeof(config->timezone) - 1);
     config->timezone[sizeof(config->timezone) - 1] = '\0';
@@ -384,7 +388,26 @@ static esp_err_t config_migrate_v2_to_v3(cam_config_t *config)
  * @brief 初始化配置管理系统
  *        初始化 NVS，加载或迁移配置（v1→v2 自动迁移）
  */
-
+/* 契约 v1.1 密码统一一次性种子：存量设备可能带未知历史密码，
+ * NVS 标记 pw_seed_v1 保证仅升级后首启执行一次（与 seeed 同款） */
+static void password_seed_once(void)
+{
+    nvs_handle_t h;
+    uint8_t seeded = 0;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u8(h, "pw_seed_v1", &seeded);
+        nvs_close(h);
+    }
+    if (seeded == 1) return;
+    ESP_LOGW(TAG, "One-shot password seed: unifying web_password to family default");
+    strncpy(s_config.web_password, "***REMOVED-DEFAULT-PASSWORD***", sizeof(s_config.web_password) - 1);
+    config_save(&s_config);
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, "pw_seed_v1", 1);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
 
 esp_err_t config_init(void)
 {
@@ -461,6 +484,7 @@ esp_err_t config_init(void)
             s_config.resolution = 0;
         }
         s_config_initialized = true;
+        password_seed_once();
         return ESP_OK;
     }
     
@@ -472,6 +496,7 @@ esp_err_t config_init(void)
             esp_err_t save_ret = config_save(&s_config);
             if (save_ret == ESP_OK) {
                 s_config_initialized = true;
+                password_seed_once();
             }
             if (save_ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to save v2→v3 migrated config: %s", esp_err_to_name(save_ret));

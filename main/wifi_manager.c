@@ -394,6 +394,15 @@ esp_err_t wifi_start_sta(const char *ssid, const char *pass)
         ESP_LOGW(TAG, "Failed to disable PS: %s", esp_err_to_name(ret));
     }
 
+    /* HT20 (强制 BW20)：本板曾与 HT40 AP (ch11) 谈到 40MHz，-70dBm 下 PER 恶化、
+     * ping 1-2.4s。HT20 比 HT40 RX 灵敏度好 ~3dB —— ai-thinker 弱信号同款配置。 */
+    ret = esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW20);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "set_bandwidth HT20 failed: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "WiFi bandwidth: HT20 (weak-signal optimized)");
+    }
+
     // Boost TX power to 15 dBm (same as working seeed-esp32s3-cam)
     {
         int8_t power_param = (int8_t)(15 / 0.25);

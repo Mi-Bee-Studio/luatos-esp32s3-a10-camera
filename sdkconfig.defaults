@@ -45,6 +45,12 @@ CONFIG_HTTPD_MAX_URI_LEN=1024
 CONFIG_HTTPD_WS_SUPPORT=y
 CONFIG_HTTPD_WS_KEEPALIVE_DELAY=1000
 
+# lwIP — 2026-09-03 EMFILE 事故（同 seeed 病根）：被堆门槛拒绝的浏览器按退避重连，
+# 每次 503+close 留 TIME_WAIT 插座；默认 10 插座 + MSL 60s → 表打满，httpd 无法
+# accept，/api/status 间歇空响应。插座 10→16，TIME_WAIT 120s→30s。
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_LWIP_TCP_MSL=15000
+
 
 # WiFi - disable WPA3 to prevent SAE auth issues (AMPDU disabled bypasses stall)
 # CONFIG_ESP_WIFI_ENABLE_WPA3_SAE is not set
@@ -53,9 +59,13 @@ CONFIG_HTTPD_WS_KEEPALIVE_DELAY=1000
 # CONFIG_ESP_WIFI_SOFTAP_SAE_SUPPORT is not set
 # CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA is not set
 
-# WiFi - disable AMPDU TX/RX (same as working seeed-esp32s3-cam)
-CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
-CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+# WiFi - AMPDU TX/RX re-enabled 2026-09-03: seeed now ships AMPDU ON (its comment:
+# "aggregation significantly improves MJPEG/RTSP streaming throughput"), and this
+# board's link collapsed with it off at HT40/-70dBm (ping 1-2.4s, HTTP 8s+).
+# Original =n was a driver-stall workaround — re-validated on hardware after this
+# change (fluents serial soak, no stall observed). Revert if stalls return.
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
 
 # MiBeeCam feature flags (compile-time enable/disable)
 CONFIG_MIBEECAM_ENABLE_WEBHOOK=y
