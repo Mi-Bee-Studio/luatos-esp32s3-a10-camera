@@ -29,6 +29,7 @@
 #include "camera_driver.h"
 #include "mjpeg_streamer.h"
 #include "motion_detect.h"
+#include "lwip/sockets.h"  /* setsockopt / TCP_NODELAY in on_session_open */
 #include "event_bus.h"
 
 #include <stdbool.h>
