@@ -19,6 +19,7 @@
 #include "wifi_manager.h"
 #include "config_manager.h"
 #include "esp_mac.h"
+#include "device_id.h"
 #include "esp_random.h"
 
 #ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
@@ -64,13 +65,8 @@ static esp_err_t handle_http_probe(httpd_req_t *req, const char *body)
         return ESP_FAIL;
     }
 
-    /* Generate device UUID from MAC */
-    uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    char device_uuid[64];
-    snprintf(device_uuid, sizeof(device_uuid),
-             "%02x%02x%02x%02x%02x%02x",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    /* Stable device UUID derived from factory eFuse MAC (WiFi-independent). */
+    const char *device_uuid = device_get_uuid();
 
     /* Extract MessageID from incoming Probe for RelatesTo */
     char relates_to[128] = "";
@@ -177,7 +173,7 @@ static esp_err_t onvif_device_handler(httpd_req_t *req)
             "<tt:SerialNumber>%s</tt:SerialNumber>"
             "<tt:HardwareId>ESP32-S3</tt:HardwareId>"
             "</tds:GetDeviceInformationResponse>",
-            ip);
+            device_get_serial());
         n = soap_envelope(response, sizeof(response), soap_body);
         if (n >= (int)sizeof(response)) {
             ESP_LOGW(TAG, "ONVIF response truncated");
