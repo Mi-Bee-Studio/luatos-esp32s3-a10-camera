@@ -73,7 +73,7 @@ esp_err_t event_bus_init(void);
  * @param out_id    Output parameter receiving the subscription ID (can be NULL)
  * @return ESP_OK on success
  * @return ESP_ERR_INVALID_ARG if handler is NULL
- * @return ESP_ERR_NO_MEM if the subscription table is full (max 8)
+ * @return ESP_ERR_NO_MEM if the subscription table is full (max 16)
  */
 esp_err_t event_bus_subscribe(event_type_t type, event_handler_t handler, void *user_data, subscription_id_t *out_id);
 

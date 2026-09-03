@@ -125,6 +125,10 @@ static esp_err_t upload_with_retry(const uint8_t *buf, size_t len)
         if (err == ESP_OK) {
             return ESP_OK;
         }
+        if (err == ESP_ERR_INVALID_STATE) {
+            /* No server URL configured — retrying cannot succeed */
+            return err;
+        }
         ESP_LOGW(TAG, "Upload retry %d/%d", i + 1, UPLOAD_MAX_RETRIES);
         vTaskDelay(pdMS_TO_TICKS(UPLOAD_RETRY_DELAY_MS));
     }
@@ -290,6 +294,10 @@ static void motion_detection_task(void *arg)
                 };
                 event_bus_publish(&motion_event);
 
+                /* 无上传目标时跳过抓帧+拷贝：曾每次 motion 事件白抓 20KB JPEG
+                 * （upload_with_retry 才发现 URL 为空），s_jpeg_copy 首次分配后
+                 * 常驻不释放，空闲堆永久少 ~20KB。事件发布保留，仅跳过上传路径。 */
+                if (cfg->server_url[0] != '\0')
                 /* Capture a fresh frame for upload (broadcaster or direct) */
 #ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
                 {

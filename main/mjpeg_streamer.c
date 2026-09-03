@@ -22,6 +22,7 @@
 #include "camera_driver.h"
 #include "config_manager.h"
 #include "event_bus.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -41,7 +42,16 @@ static const char *TAG = "mjpeg";
 #define STREAM_BOUNDARY    "\r\n--" PART_BOUNDARY "\r\n" \
                            "Content-Type: image/jpeg\r\n" \
                            "Content-Length: %u\r\n\r\n"
-#define MAX_STREAM_CLIENTS 2
+/* 2026-09-03 终局结论：本板（DRAM-only, fb_count=1）双流在任何堆水位下都不安全
+ * ——30K/34K 门槛都会被开机初期的高堆瞬时值绕过，双流实测 min_heap 108~1276B、
+ * 取帧分配失败、摄像头互斥锁超时。改为硬单流（MAX=1）：新观众 LRU 踢旧观众，
+ * SPA 看门狗 ~7s 自动重连（与 ai-thinker 同模型）。堆门槛保留作纵深防御。 */
+#define MAX_STREAM_CLIENTS 1
+/* 第 2 路流客户端的堆水位门槛（字节）。DRAM-only 板实测：双流期间 min_heap
+ * 压到 108~1276B，取帧分配失败/摄像头互斥锁超时 → httpd 卡死或流自断。
+ * 单流稳态 free ≈ 25~31K 且有瞬时波动，30K 门槛仍会被瞬时高值放过第 2 路
+ * （2026-09-03 12:02 实录：31.6K 放行 → min 1276）。取 34K：稳定拒绝。 */
+#define MJPEG_2ND_CLIENT_HEAP_FLOOR (34 * 1024)
 #define CHUNK_SIZE         4096
 #define LISTEN_BACKLOG     5
 #define CLIENT_TASK_STACK  4096
@@ -51,6 +61,7 @@ static const char *TAG = "mjpeg";
 
 static int               s_client_count   = 0;
 static int               s_client_socks[MAX_STREAM_CLIENTS];
+static TickType_t        s_client_since[MAX_STREAM_CLIENTS];  /* LRU 踢除依据 */
 static SemaphoreHandle_t s_mutex          = NULL;
 static TaskHandle_t      s_listen_task    = NULL;
 static int               s_listen_sock    = -1;
@@ -303,24 +314,69 @@ static void mjpeg_listen_task(void *arg)
             continue;
         }
 
-        /* Enforce client limit */
+        /* 满员时踢最旧连接（LRU）：shutdown 唤醒其阻塞 send/recv → 自行清理释放槽位。
+         * 新连接（用户刚打开的页面）永远优先于滞留的旧连接 */
+        bool slot_ready = false;
         xSemaphoreTake(s_mutex, portMAX_DELAY);
-        if (s_client_count >= MAX_STREAM_CLIENTS) {
+        /* 本板无 PSRAM：实测双客户端拉流把 min_heap 压到 ~100B。
+         * 堆水位准入门 — 第 2 路客户端仅在堆健康时放行，否则 503 让端上稍后重试。
+         * 首路客户端不设限（设备必须始终可看）。 */
+        if (s_client_count >= 1 &&
+            esp_get_free_heap_size() < MJPEG_2ND_CLIENT_HEAP_FLOOR) {
             xSemaphoreGive(s_mutex);
-            ESP_LOGW(TAG, "Max stream clients (%d) reached, rejecting",
-                     MAX_STREAM_CLIENTS);
+            ESP_LOGW(TAG, "Rejecting 2nd stream client: heap %u < %u",
+                     (unsigned)esp_get_free_heap_size(),
+                     (unsigned)MJPEG_2ND_CLIENT_HEAP_FLOOR);
+            const char *busy =
+                "HTTP/1.1 503 Service Unavailable\r\n"
+                "Content-Length: 21\r\n\r\nLow memory, retry\r\n";
+            send(client_sock, busy, strlen(busy), 0);
+            close(client_sock);
+            continue;
+        }
+        if (s_client_count < MAX_STREAM_CLIENTS) {
+            slot_ready = true;
+        } else {
+            TickType_t now = xTaskGetTickCount();
+            int oldest_i = -1;
+            TickType_t oldest_age = 0;
+            for (int i = 0; i < MAX_STREAM_CLIENTS; i++) {
+                if (s_client_socks[i] >= 0) {
+                    TickType_t age = (TickType_t)(now - s_client_since[i]);
+                    if (age >= oldest_age) {
+                        oldest_age = age;
+                        oldest_i = i;
+                    }
+                }
+            }
+            if (oldest_i >= 0) {
+                ESP_LOGW(TAG, "Max clients (%d) — kicking oldest fd=%d for newcomer",
+                         MAX_STREAM_CLIENTS, s_client_socks[oldest_i]);
+                shutdown(s_client_socks[oldest_i], SHUT_RDWR);
+            }
+        }
+        xSemaphoreGive(s_mutex);
+
+        for (int wait = 0; !slot_ready && wait < 20; wait++) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            xSemaphoreTake(s_mutex, portMAX_DELAY);
+            slot_ready = (s_client_count < MAX_STREAM_CLIENTS);
+            xSemaphoreGive(s_mutex);
+        }
+        if (!slot_ready) {
+            ESP_LOGW(TAG, "Slot still busy after kick — rejecting with 503");
             const char *reject = "HTTP/1.1 503 Service Unavailable\r\n"
                                  "Content-Length: 25\r\n\r\nMax stream connections\r\n";
             send(client_sock, reject, strlen(reject), 0);
             close(client_sock);
             continue;
         }
-
         /* Find free slot in client socket tracking array */
         int slot = -1;
         for (int i = 0; i < MAX_STREAM_CLIENTS; i++) {
             if (s_client_socks[i] < 0) {
                 s_client_socks[i] = client_sock;
+                s_client_since[i] = xTaskGetTickCount();
                 slot = i;
                 break;
             }

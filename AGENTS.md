@@ -93,7 +93,17 @@ To disable a feature: set `=n` in `sdkconfig.defaults`, delete `sdkconfig`, rebu
 ## WiFi quirks (from sdkconfig.defaults)
 
 - **WPA3 fully disabled** (SAE auth issues on this board): WPA3_SAE, SAE_PK, SAE_H2E, SOFTAP_SAE, WPA3_OWE all off.
+- **AMPDU TX/RX 重新启用（2026-09-03 晚，已上板复验）**：原先 =n 是绕驱动 stall 的权宜，
+  但实测 HT40/-70dBm 场景下链路崩塌（ping 1-2.4s、HTTP 8s+）。seeed 现行配置就是
+  AMPDU ON。重开后 `<ba-add>` 会话建立、ping 317ms→5ms、落点 MiBeeAP2 ch2 BW20 -59dBm。
+  若串口再见 stall 可回退（defaults 里有注释）。
+- **STA 强制 HT20**（`wifi_start_sta` 里 `esp_wifi_set_bandwidth`）：本板曾与 HT40 AP
+  （ch11）谈到 40MHz，弱信号下 PER 恶化；HT20 灵敏度好 ~3dB（ai-thinker 同款）。
 - Default AP on first boot: SSID `MiBeeCam`, password `12345678`, config at `http://192.168.4.1`.
+- **status 新字段（2026-09-03 晚）**：`current_ssid`（实连 SSID）、`wifi_net`
+  （primary|secondary，映射自 active_ssid_index）——SPA 顶栏/WiFi 页当前连接行依赖它们。
+- **health 探测防误杀（PIT-002）**：WiFi 未连接时探测失败不计数（此前 4/4 无条件重启，
+  掉线 120s 会被翻译成重启）。
 
 ## Frame-buffer constraint (fb_count=1)
 

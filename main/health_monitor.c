@@ -58,7 +58,10 @@ static bool probe_httpd_port80(void)
 
 static size_t s_baseline_free_heap = 0;
 static size_t s_baseline_min_heap = 0;
-#define HEAP_WARNING_THRESHOLD 30720  // 30KB
+/* 本板无 PSRAM：单路 MJPEG 拉流的正常稳态 free ≈ 24~26KB（基线 105KB）。
+ * 30KB 阈值会把正常运行当警告刷屏（每 30s 一条 + WS 事件），校准到 15KB：
+ * 低于它才意味着流/WS/motion 之外出现了真正的内存泄漏。 */
+#define HEAP_WARNING_THRESHOLD 15360  // 15KB
 
 static float read_temperature_sensor(void) {
     time_t now = time(NULL);
@@ -84,7 +87,9 @@ static float read_temperature_sensor(void) {
 
 static void health_monitor_task(void *pvParameters) {
     while (1) {
-        time_t uptime = time(NULL);
+        /* esp_timer, not time(): SNTP jumps the wall clock, time() would
+         * report epoch seconds instead of uptime after sync */
+        uint64_t uptime = esp_timer_get_time() / 1000000ULL;
         
         // Get system metrics
         size_t free_heap = esp_get_free_heap_size();
@@ -107,11 +112,11 @@ static void health_monitor_task(void *pvParameters) {
         
         int heap_delta = (int)free_heap - (int)s_baseline_free_heap;
         ESP_LOGI(TAG, "Health Report | Uptime: %ld | Heap: %u/%u | PSRAM: %u | Min Heap: %u | Temp: %.2f\u00b0C | WiFi: %s | HeapDelta: %d",
-                 (long)uptime, (unsigned)free_heap, (unsigned)(free_heap - min_heap), (unsigned)free_psram, (unsigned)min_heap, temp, wifi_state_str, heap_delta);
+                 (unsigned long)uptime, (unsigned)free_heap, (unsigned)(free_heap - min_heap), (unsigned)free_psram, (unsigned)min_heap, temp, wifi_state_str, heap_delta);
 
         // Check heap threshold and publish warning
         size_t current_free = esp_get_free_heap_size();
-        if (current_free < 30720) {  // 30KB threshold
+        if (current_free < HEAP_WARNING_THRESHOLD) {
             event_t health_event = {
                 .type = EVENT_HEALTH_WARNING,
                 .timestamp = esp_timer_get_time(),
@@ -119,7 +124,7 @@ static void health_monitor_task(void *pvParameters) {
                 .payload_len = 0,
             };
             event_bus_publish(&health_event);
-            ESP_LOGW(TAG, "Health warning: free heap %u < 30KB threshold", (unsigned)current_free);
+            ESP_LOGW(TAG, "Health warning: free heap %u < %dKB threshold", (unsigned)current_free, HEAP_WARNING_THRESHOLD / 1024);
         }
 
         // Per-task stack high water marks (diagnostic)
@@ -132,14 +137,23 @@ static void health_monitor_task(void *pvParameters) {
         }
 
         /* httpd :80 self-heal: probe every cycle (30s).
-         * 4 consecutive failures (120s unresponsive) → reboot. */
+         * 4 consecutive failures (120s unresponsive) → reboot.
+         * 2026-09-03 (PIT-002 家族规则): WiFi 未连接时探测必失败（EHOSTUNREACH/EMFILE
+         * 也要占用插座），此时不计数——那是网络不在，不是 httpd 死了；否则掉线 120s
+         * 会被翻译成重启，越重启越乱（ai-thinker 同款事故）。 */
         static int httpd_stuck_count = 0;
         if (!probe_httpd_port80()) {
-            httpd_stuck_count++;
-            ESP_LOGW(TAG, "httpd :80 probe failed (%d/4)", httpd_stuck_count);
-            if (httpd_stuck_count >= 4) {
-                ESP_LOGE(TAG, "httpd :80 unresponsive for 120s — rebooting");
-                esp_restart();
+            wifi_state_t probe_ws = wifi_get_state();
+            if (probe_ws != WIFI_STATE_STA_CONNECTED && probe_ws != WIFI_STATE_AP) {
+                httpd_stuck_count = 0;
+                ESP_LOGW(TAG, "httpd probe failed but WiFi down — not counting (network issue, not httpd)");
+            } else {
+                httpd_stuck_count++;
+                ESP_LOGW(TAG, "httpd :80 probe failed (%d/4)", httpd_stuck_count);
+                if (httpd_stuck_count >= 4) {
+                    ESP_LOGE(TAG, "httpd :80 unresponsive for 120s — rebooting");
+                    esp_restart();
+                }
             }
         } else {
             httpd_stuck_count = 0;
@@ -151,7 +165,9 @@ static void health_monitor_task(void *pvParameters) {
 
 esp_err_t health_monitor_init(void) {
     // Initialize temperature sensor
-    temperature_sensor_config_t temp_sensor_config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 50);
+    // 量程 (20,100)：S3 固定档为 [-10,80]/[20,100]/[50,125]/[-30,50]，摄像头长期运行
+    // 会超过 50°C，原 (10,50) 档在发热后读数超量程失真
+    temperature_sensor_config_t temp_sensor_config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(20, 100);
     esp_err_t ret = temperature_sensor_install(&temp_sensor_config, &temp_sensor);
     
     if (ret != ESP_OK) {

@@ -12,8 +12,9 @@
 
 static const char *TAG = "event_bus";
 
-/** @brief Maximum number of subscriptions across all event types */
-#define MAX_SUBSCRIPTIONS 8
+/** @brief Maximum number of subscriptions across all event types.
+ *  v1.1: 9 WS event hooks + webhook subscriptions overflowed 8 — keep headroom. */
+#define MAX_SUBSCRIPTIONS 16
 
 /**
  * @brief Internal subscription entry
