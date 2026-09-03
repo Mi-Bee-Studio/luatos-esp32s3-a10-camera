@@ -282,6 +282,8 @@ static esp_err_t handler_api_status(httpd_req_t *req)
     wifi_state_t ws = wifi_get_state();
 
     cJSON *data = cJSON_CreateObject();
+    cJSON_AddStringToObject(data, "device_name",
+        cfg->device_name[0] ? cfg->device_name : "MiBeeCam");
     cJSON_AddStringToObject(data, "wifi_ssid", cfg->wifi_ssid);
 
     const char *state_str = "unknown";
@@ -300,17 +302,24 @@ static esp_err_t handler_api_status(httpd_req_t *req)
         if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
             cJSON_AddNumberToObject(data, "wifi_rssi", ap_info.rssi);
             cJSON_AddNumberToObject(data, "wifi_channel", ap_info.primary);
+            /* 当前实连 SSID（区别于上面的配置值 wifi_ssid）— 契约字段，SPA 顶栏/WiFi 页用 */
+            cJSON_AddStringToObject(data, "current_ssid", (const char *)ap_info.ssid);
         }
+    } else {
+        cJSON_AddStringToObject(data, "current_ssid", "");
     }
 
 #ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
     cJSON_AddNumberToObject(data, "active_ssid_index", wifi_get_current_ssid_index());
+    cJSON_AddStringToObject(data, "wifi_net",
+        wifi_get_current_ssid_index() ? "secondary" : "primary");
 #endif
 
     cJSON_AddStringToObject(data, "camera", camera_get_sensor_name());
-    cJSON_AddStringToObject(data, "cam_framesize", res_to_str(cfg->resolution));
+    cJSON_AddStringToObject(data, "resolution", res_to_str(cfg->resolution));
 
     cJSON_AddNumberToObject(data, "uptime", (double)(esp_timer_get_time() / 1000000));
+    cJSON_AddStringToObject(data, "firmware_version", "0.3.0");
 
     float temp = get_chip_temp();
     cJSON_AddNumberToObject(data, "chip_temp", temp);
@@ -320,10 +329,14 @@ static esp_err_t handler_api_status(httpd_req_t *req)
     size_t current_free = esp_get_free_heap_size();
     size_t current_min = esp_get_minimum_free_heap_size();
     int heap_delta = (int)current_free - (int)baseline_free;
-    cJSON_AddNumberToObject(data, "heap_free", current_free);
-    cJSON_AddNumberToObject(data, "heap_min", current_min);
+    /* 契约 v1.0 字段名: free_heap / min_heap（heap_baseline/heap_delta 为本板扩展） */
+    cJSON_AddNumberToObject(data, "free_heap", current_free);
+    cJSON_AddNumberToObject(data, "min_heap", current_min);
     cJSON_AddNumberToObject(data, "heap_baseline", baseline_free);
     cJSON_AddNumberToObject(data, "heap_delta", heap_delta);
+
+    cJSON_AddNumberToObject(data, "stream_clients", mjpeg_streamer_get_client_count());
+    cJSON_AddNumberToObject(data, "stream_clients_max", 1);  /* 2026-09-03: 硬单流（DRAM 限制），与 mjpeg_streamer MAX_STREAM_CLIENTS 同步改 */
 
     return json_ok(req, data);
 }
@@ -347,13 +360,13 @@ static esp_err_t handler_api_config_get(httpd_req_t *req)
     cJSON_AddStringToObject(data, "timezone", cfg->timezone);
     cJSON_AddNumberToObject(data, "motion_threshold", cfg->motion_threshold);
     cJSON_AddNumberToObject(data, "motion_cooldown", cfg->motion_cooldown);
-    // v3 fields
-    cJSON_AddStringToObject(data, "wifi_ssid2", cfg->wifi_ssid2);
-    cJSON_AddStringToObject(data, "wifi_pass2", cfg->wifi_pass2[0] ? "****" : "");
+    // v3 fields (契约 v1.0 键名: wifi_ssid_2 / wifi_pass_2 / onvif_enable)
+    cJSON_AddStringToObject(data, "wifi_ssid_2", cfg->wifi_ssid2);
+    cJSON_AddStringToObject(data, "wifi_pass_2", cfg->wifi_pass2[0] ? "****" : "");
     cJSON_AddStringToObject(data, "mdns_hostname", cfg->mdns_hostname);
     cJSON_AddStringToObject(data, "webhook_url", cfg->webhook_url);
     cJSON_AddStringToObject(data, "webhook_secret", cfg->webhook_secret[0] ? "****" : "");
-    cJSON_AddBoolToObject(data, "onvif_enabled", cfg->onvif_enabled);
+    cJSON_AddBoolToObject(data, "onvif_enable", cfg->onvif_enabled);
     cJSON_AddBoolToObject(data, "ws_enabled", cfg->ws_enabled);
 
     return json_ok(req, data);
@@ -437,9 +450,9 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
     if ((item = cJSON_GetObjectItem(root, "motion_cooldown")) && cJSON_IsNumber(item))
         new_cfg.motion_cooldown = (uint8_t)item->valuedouble;
     // v3 fields
-    if ((item = cJSON_GetObjectItem(root, "wifi_ssid2")) && cJSON_IsString(item))
+    if ((item = cJSON_GetObjectItem(root, "wifi_ssid_2")) && cJSON_IsString(item))
         strncpy(new_cfg.wifi_ssid2, item->valuestring, sizeof(new_cfg.wifi_ssid2) - 1);
-    if ((item = cJSON_GetObjectItem(root, "wifi_pass2")) && cJSON_IsString(item)) {
+    if ((item = cJSON_GetObjectItem(root, "wifi_pass_2")) && cJSON_IsString(item)) {
         if (strcmp(item->valuestring, "****") != 0)
             strncpy(new_cfg.wifi_pass2, item->valuestring, sizeof(new_cfg.wifi_pass2) - 1);
     }
@@ -451,12 +464,18 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
         if (strcmp(item->valuestring, "****") != 0)
             strncpy(new_cfg.webhook_secret, item->valuestring, sizeof(new_cfg.webhook_secret) - 1);
     }
-    if ((item = cJSON_GetObjectItem(root, "onvif_enabled")) && cJSON_IsNumber(item))
+    if ((item = cJSON_GetObjectItem(root, "onvif_enable")) && cJSON_IsNumber(item))
         new_cfg.onvif_enabled = (uint8_t)item->valuedouble;
     if ((item = cJSON_GetObjectItem(root, "ws_enabled")) && cJSON_IsNumber(item))
         new_cfg.ws_enabled = (uint8_t)item->valuedouble;
-    if ((item = cJSON_GetObjectItem(root, "web_password")) && cJSON_IsString(item))
+    /* 契约 v1.1：拒绝空/过短密码 */
+    if ((item = cJSON_GetObjectItem(root, "web_password")) && cJSON_IsString(item)) {
+        if (strlen(item->valuestring) < 6) {
+            cJSON_Delete(root);
+            return json_error(req, "web_password must be at least 6 characters", HTTPD_400_BAD_REQUEST);
+        }
         strncpy(new_cfg.web_password, item->valuestring, sizeof(new_cfg.web_password) - 1);
+    }
 
     cJSON_Delete(root);
 
@@ -573,7 +592,13 @@ static esp_err_t handler_capabilities(httpd_req_t *req)
         return json_error(req, "Out of memory", HTTPD_500_INTERNAL_SERVER_ERROR);
     }
 
-    /* Per-board capability matrix (luatos-esp32s3-a10-camera) */
+    /* 契约 v1.0：12 个布尔能力位 + api_version/wifi_scan（见 docs/api-contract.md） */
+    cJSON_AddStringToObject(data, "api_version", "1.1");
+#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
+    cJSON_AddBoolToObject(data, "wifi_scan", true);
+#else
+    cJSON_AddBoolToObject(data, "wifi_scan", false);
+#endif
     cJSON_AddBoolToObject(data, "ai",        false);
     cJSON_AddBoolToObject(data, "sd",        false);
     cJSON_AddBoolToObject(data, "audio",     false);
@@ -830,6 +855,9 @@ static esp_err_t handler_static(httpd_req_t *req)
     }
 
     httpd_resp_set_type(req, get_content_type(filepath));
+    /* UI 随固件更新：静态资源一律 no-cache，避免"新 HTML 配旧 JS"的一小时窗口
+     * （2026-09-03 crossOrigin 修复后浏览器仍用旧缓存 app.js 才暴露） */
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, must-revalidate");
 
     char buf[1024];
     size_t total = 0;
@@ -905,10 +933,11 @@ esp_err_t ws_broadcast_text(const char *msg, size_t len)
 
 static void event_to_json(const event_t *event, char *out_buf, size_t buf_len)
 {
+    /* 契约 v1.0 统一事件格式: {"type","timestamp","data"} */
     const char *type_str = "unknown";
     switch (event->type) {
-        case EVENT_MOTION_DETECTED: type_str = "motion_detected"; break;
-        case EVENT_MOTION_END: type_str = "motion_end"; break;
+        case EVENT_MOTION_DETECTED: type_str = "motion_started"; break;
+        case EVENT_MOTION_END:      type_str = "motion_cleared"; break;
         case EVENT_WIFI_STATE_CHANGED: type_str = "wifi_state_changed"; break;
         case EVENT_WIFI_SWITCHED_SSID: type_str = "wifi_switched_ssid"; break;
         case EVENT_STREAM_CLIENT_CONNECTED: type_str = "stream_client_connected"; break;
@@ -919,7 +948,7 @@ static void event_to_json(const event_t *event, char *out_buf, size_t buf_len)
         default: break;
     }
     snprintf(out_buf, buf_len,
-             "{\"type\":\"%s\",\"timestamp\":%lld}",
+             "{\"type\":\"%s\",\"timestamp\":%lld,\"data\":{}}",
              type_str, (long long)(event->timestamp / 1000));
 }
 
@@ -936,7 +965,7 @@ static void ws_event_handler(const event_t *event, void *user_data)
 /*  Unified API endpoints (ported from esp32s3-n16r8-cam)             */
 /* ------------------------------------------------------------------ */
 
-/* GET /api/camera — current camera settings (mapped to SPA field names) */
+/* GET /api/camera — current camera settings (契约 v1.0: 含 supported_resolutions) */
 static esp_err_t handler_api_camera_get(httpd_req_t *req)
 {
     const cam_config_t *cfg = config_get();
@@ -944,17 +973,25 @@ static esp_err_t handler_api_camera_get(httpd_req_t *req)
     if (!data)
         return json_error(req, "alloc failed", HTTPD_500_INTERNAL_SERVER_ERROR);
 
-    /* Persisted fields (luatos config uses resolution/jpeg_quality, no vflip) */
+    /* 本板仅支持分辨率/JPEG 质量持久化；传感器微调字段不返回（前端按字段缺省隐藏） */
+    cJSON_AddStringToObject(data, "resolution", res_to_str(cfg->resolution));
     cJSON_AddNumberToObject(data, "cam_framesize", (double)cfg->resolution);
     cJSON_AddNumberToObject(data, "cam_quality",   (double)cfg->jpeg_quality);
-    cJSON_AddNumberToObject(data, "cam_vflip",     0);
 
-    /* Sensor-only fields not persisted on this board — defaults match OV2640 power-on */
-    cJSON_AddNumberToObject(data, "cam_brightness", 0);
-    cJSON_AddNumberToObject(data, "cam_contrast",   0);
-    cJSON_AddNumberToObject(data, "cam_saturation", 0);
-    cJSON_AddNumberToObject(data, "cam_sharpness",  0);
-    cJSON_AddBoolToObject(data,   "cam_hmirror",    false);
+    /* 2026-09-03 实测封禁 >VGA：SVGA 使 cam_hal DMA 池 61KB→96KB（800×600/5），
+     * 空闲堆 45K→16K，暗光大帧再挤压 → 每秒分配失败、httpd 拒连、流 16s 断连螺旋。
+     * 本板（DRAM-only, fb_count=1）稳定档位只有 VGA。"能出图"≠"能稳定带流"。 */
+    cJSON *res_arr = cJSON_CreateArray();
+    static const struct { int value; const char *label; } res_list[] = {
+        { 0, "VGA (640x480)" },
+    };
+    for (size_t i = 0; i < sizeof(res_list) / sizeof(res_list[0]); i++) {
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "label", res_list[i].label);
+        cJSON_AddNumberToObject(item, "value", res_list[i].value);
+        cJSON_AddItemToArray(res_arr, item);
+    }
+    cJSON_AddItemToObject(data, "supported_resolutions", res_arr);
 
     return json_ok(req, data);
 }
@@ -980,8 +1017,16 @@ static esp_err_t handler_api_camera_post(httpd_req_t *req)
     cam_config_t newcfg = *cfg;
 
     cJSON *fs = cJSON_GetObjectItem(json, "cam_framesize");
-    if (fs && cJSON_IsNumber(fs))
-        newcfg.resolution = (uint8_t)fs->valuedouble;
+    if (fs && cJSON_IsNumber(fs)) {
+        int val = (int)fs->valuedouble;
+        /* 同 GET 端点的实测封禁：>VGA 在本板触发堆枯竭螺旋（详见 GET 注释） */
+        if (val != 0) {
+            cJSON_Delete(json);
+            return json_error(req, "cam_framesize: this board supports VGA only (DRAM constraint)",
+                             HTTPD_400_BAD_REQUEST);
+        }
+        newcfg.resolution = (uint8_t)val;
+    }
 
     cJSON *q = cJSON_GetObjectItem(json, "cam_quality");
     if (q && cJSON_IsNumber(q))
@@ -996,47 +1041,116 @@ static esp_err_t handler_api_camera_post(httpd_req_t *req)
     if (ret != ESP_OK)
         return json_error(req, "save failed", HTTPD_500_INTERNAL_SERVER_ERROR);
 
-    /* Attempt live camera reinit — non-fatal if it fails (settings apply on reboot) */
-    camera_deinit();
-    ret = camera_init(newcfg.resolution, newcfg.fps, newcfg.jpeg_quality);
-    if (ret != ESP_OK)
-        ESP_LOGW(TAG, "camera reinit failed after config save: %s", esp_err_to_name(ret));
-
-    cJSON *data = cJSON_CreateObject();
-    cJSON_AddStringToObject(data, "status", ret == ESP_OK ? "applied" : "saved (reboot to apply)");
-    return json_ok(req, data);
+    /* 2026-09-03 实测事故：热重配（camera_deinit+init）在 MJPEG/motion/广播
+     * 生产者并发取帧时导致设备级静默死亡（fb_count=1 DRAM，无 PSRAM）。
+     * 本板改为"保存 + 延迟重启应用"——重启是干净的锤子，零竞态。
+     * 姐妹板（PSRAM, fb_count=2）不受此限，仍走热重配。 */
+    {
+        cJSON *data = cJSON_CreateObject();
+        cJSON_AddStringToObject(data, "status", "saved (rebooting to apply)");
+        cJSON_AddBoolToObject(data, "rebooting", true);
+        esp_err_t send_ret = json_ok(req, data);
+        ESP_LOGW(TAG, "Camera config saved — rebooting to apply (quality=%u res=%u)",
+                 newcfg.jpeg_quality, newcfg.resolution);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        esp_restart();
+        return send_ret;
+    }
 }
 
-/* GET /api/led — flash LED state (this board has no flash LED, always off) */
-static esp_err_t handler_api_led_get(httpd_req_t *req)
+/* GET /api/auth — 校验 X-Password（契约 v1.0 核心端点） */
+static esp_err_t handler_api_auth(httpd_req_t *req)
 {
-    cJSON *data = cJSON_CreateObject();
-    if (!data)
-        return json_error(req, "alloc failed", HTTPD_500_INTERNAL_SERVER_ERROR);
-    cJSON_AddBoolToObject(data, "on", false);
-    return json_ok(req, data);
+    const cam_config_t *cfg = config_get();
+
+    if (cfg->web_password[0] == '\0') {
+        cJSON *data = cJSON_CreateObject();
+        cJSON_AddBoolToObject(data, "auth", true);
+        cJSON_AddBoolToObject(data, "password_set", false);
+        return json_ok(req, data);
+    }
+    if (check_auth(req)) {
+        cJSON *data = cJSON_CreateObject();
+        cJSON_AddBoolToObject(data, "auth", true);
+        cJSON_AddBoolToObject(data, "password_set", true);
+        return json_ok(req, data);
+    }
+    return json_error(req, "unauthorized", HTTPD_401_UNAUTHORIZED);
 }
 
-/* GET /api/ai/status — AI detection results (board has no AI, return empty shape) */
-static esp_err_t handler_api_ai_status(httpd_req_t *req)
+/* POST /api/time — 手动设置系统时间（契约 v1.0 核心端点） */
+static esp_err_t handler_api_time(httpd_req_t *req)
 {
-    cJSON *data = cJSON_CreateObject();
-    cJSON *face = cJSON_CreateObject();
-    cJSON_AddItemToObject(face, "boxes", cJSON_CreateArray());
-    cJSON_AddItemToObject(data, "face", face);
-    cJSON *motion = cJSON_CreateObject();
-    cJSON_AddNumberToObject(motion, "score", 0);
-    cJSON_AddBoolToObject(motion, "detected", false);
-    cJSON_AddItemToObject(data, "motion", motion);
-    cJSON *qr = cJSON_CreateObject();
-    cJSON_AddStringToObject(qr, "text", "");
-    cJSON_AddItemToObject(data, "qr", qr);
-    return json_ok(req, data);
+    esp_err_t auth = require_auth(req);
+    if (auth != ESP_OK)
+        return json_error(req, "UNAUTHORIZED", HTTPD_401_UNAUTHORIZED);
+
+    char *body = NULL;
+    int body_len = 0;
+    if (read_body(req, &body, &body_len) != ESP_OK || !body)
+        return json_error(req, "empty body", HTTPD_400_BAD_REQUEST);
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json)
+        return json_error(req, "invalid JSON", HTTPD_400_BAD_REQUEST);
+
+    cJSON *jy = cJSON_GetObjectItem(json, "year");
+    cJSON *jmo = cJSON_GetObjectItem(json, "month");
+    cJSON *jd = cJSON_GetObjectItem(json, "day");
+    cJSON *jh = cJSON_GetObjectItem(json, "hour");
+    cJSON *jmi = cJSON_GetObjectItem(json, "min");
+    cJSON *js = cJSON_GetObjectItem(json, "sec");
+
+    if (!cJSON_IsNumber(jy) || !cJSON_IsNumber(jmo) || !cJSON_IsNumber(jd) ||
+        !cJSON_IsNumber(jh) || !cJSON_IsNumber(jmi) || !cJSON_IsNumber(js)) {
+        cJSON_Delete(json);
+        return json_error(req, "Missing time fields", HTTPD_400_BAD_REQUEST);
+    }
+
+    struct tm tm_now = {
+        .tm_year = jy->valueint - 1900,
+        .tm_mon = jmo->valueint - 1,
+        .tm_mday = jd->valueint,
+        .tm_hour = jh->valueint,
+        .tm_min = jmi->valueint,
+        .tm_sec = js->valueint,
+    };
+    time_t epoch = mktime(&tm_now);
+    cJSON_Delete(json);
+
+    if (epoch < (time_t)1577836800) {
+        return json_error(req, "Invalid date", HTTPD_400_BAD_REQUEST);
+    }
+    struct timeval tv = { .tv_sec = epoch, .tv_usec = 0 };
+    settimeofday(&tv, NULL);
+    return json_ok(req, NULL);
 }
 
 /* ------------------------------------------------------------------ */
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
+
+/* Set TCP_NODELAY + keepalive on every new HTTP connection.
+ * NODELAY: disable Nagle's algorithm so small HTTP writes (headers, MJPEG
+ * boundaries) aren't delayed by up to 1 RTT on marginal WiFi.
+ * KEEPALIVE: detect dead connections in ~11s (5s idle + 3×2s probes),
+ * freeing up limited server sockets for new clients. */
+static esp_err_t on_session_open(httpd_handle_t hd, int sockfd)
+{
+    int enable = 1;
+    setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &enable, sizeof(enable));
+
+    int keepalive = 1;
+    int keepidle  = 5;
+    int keepintvl = 2;
+    int keepcnt   = 3;
+    setsockopt(sockfd, SOL_SOCKET,  SO_KEEPALIVE,  &keepalive, sizeof(keepalive));
+    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE,  &keepidle,  sizeof(keepidle));
+    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT,   &keepcnt,   sizeof(keepcnt));
+    return ESP_OK;
+}
 
 esp_err_t web_server_start(uint16_t port)
 {
@@ -1053,6 +1167,7 @@ esp_err_t web_server_start(uint16_t port)
     config.send_wait_timeout = 30;
     config.lru_purge_enable = true;
     config.uri_match_fn = httpd_uri_match_wildcard;
+    config.open_fn = on_session_open;  /* TCP_NODELAY + keepalive per socket */
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start web server on port %d", port);
@@ -1140,19 +1255,21 @@ esp_err_t web_server_start(uint16_t port)
         .handler  = handler_api_camera_post,
         .user_ctx = NULL,
     };
-    const httpd_uri_t api_led_get = {
-        .uri      = "/api/led",
+    const httpd_uri_t api_auth = {
+        .uri      = "/api/auth",
         .method   = HTTP_GET,
-        .handler  = handler_api_led_get,
+        .handler  = handler_api_auth,
         .user_ctx = NULL,
     };
-    const httpd_uri_t api_ai_status = {
-        .uri      = "/api/ai/status",
-        .method   = HTTP_GET,
-        .handler  = handler_api_ai_status,
+    const httpd_uri_t api_time = {
+        .uri      = "/api/time",
+        .method   = HTTP_POST,
+        .handler  = handler_api_time,
         .user_ctx = NULL,
     };
 
+    /* 通配符匹配按注册顺序生效：精确端点必须先于 GET 通配符静态兜底注册，
+     * 否则 /api/camera、/ws 会被静态处理器吞掉返回 404（曾致统一 SPA 失效） */
     httpd_register_uri_handler(s_server, &api_status);
     httpd_register_uri_handler(s_server, &api_config_get);
     httpd_register_uri_handler(s_server, &api_config_post);
@@ -1164,12 +1281,11 @@ esp_err_t web_server_start(uint16_t port)
     httpd_register_uri_handler(s_server, &api_scan);
 #endif
     httpd_register_uri_handler(s_server, &metrics);
-    httpd_register_uri_handler(s_server, &options_any);
-    httpd_register_uri_handler(s_server, &static_any);
     httpd_register_uri_handler(s_server, &api_camera_get);
     httpd_register_uri_handler(s_server, &api_camera_post);
-    httpd_register_uri_handler(s_server, &api_led_get);
-    httpd_register_uri_handler(s_server, &api_ai_status);
+    httpd_register_uri_handler(s_server, &api_auth);
+    httpd_register_uri_handler(s_server, &api_time);
+    httpd_register_uri_handler(s_server, &options_any);
 
 #ifdef CONFIG_MIBEECAM_ENABLE_WS
     ws_clients_init();
@@ -1193,6 +1309,9 @@ esp_err_t web_server_start(uint16_t port)
     event_bus_subscribe(EVENT_UPLOAD_FAILED, ws_event_handler, NULL, NULL);
     ESP_LOGI(TAG, "WS event subscriptions registered");
 #endif
+
+    /* 静态兜底必须最后注册（见上方顺序说明） */
+    httpd_register_uri_handler(s_server, &static_any);
 
     ESP_LOGI(TAG, "Web server started on port %d", port);
     return ESP_OK;
