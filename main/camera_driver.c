@@ -91,9 +91,10 @@ esp_err_t camera_init(camera_resolution_t resolution, uint8_t fps, uint8_t jpeg_
         ESP_LOGW(TAG, "Invalid fps 0, defaulting to %d", DEFAULT_FPS);
         fps = DEFAULT_FPS;
     }
-    if (jpeg_quality > 63) {
-        ESP_LOGW(TAG, "JPEG quality %d out of range [0-63], clamping to 63", jpeg_quality);
-        jpeg_quality = 63;
+    if (jpeg_quality < CAMERA_QUALITY_MIN || jpeg_quality > CAMERA_QUALITY_MAX) {
+        ESP_LOGW(TAG, "JPEG quality %d out of range [%d-%d], clamping",
+                 jpeg_quality, CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
+        jpeg_quality = (jpeg_quality < CAMERA_QUALITY_MIN) ? CAMERA_QUALITY_MIN : CAMERA_QUALITY_MAX;
     }
 
     /* XCLK frequency: 10MHz for <= 15fps, 20MHz for > 15fps */

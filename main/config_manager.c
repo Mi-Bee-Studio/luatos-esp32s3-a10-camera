@@ -4,6 +4,7 @@
  */
 
 #include "config_manager.h"
+#include "camera_driver.h"
 #include "cJSON.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -383,6 +384,8 @@ static esp_err_t config_migrate_v2_to_v3(cam_config_t *config)
  * @brief 初始化配置管理系统
  *        初始化 NVS，加载或迁移配置（v1→v2 自动迁移）
  */
+
+
 esp_err_t config_init(void)
 {
     static bool s_config_initialized = false;
@@ -443,6 +446,20 @@ esp_err_t config_init(void)
     
     if (ret == ESP_OK && s_config.magic == CONFIG_MAGIC && s_config.version == CONFIG_VERSION) {
         ESP_LOGI(TAG, "Config v3 loaded successfully from %s namespace", NVS_NAMESPACE);
+        /* 旧固件可能存过超出当前板级边界的值（如 q<10 会撑爆 JPEG fb）——
+         * 加载时钳制，保证运行值与 /api/camera 上报一致 */
+        if (s_config.jpeg_quality < CAMERA_QUALITY_MIN) {
+            ESP_LOGW(TAG, "Legacy jpeg_quality=%u clamped to %d on load",
+                     s_config.jpeg_quality, CAMERA_QUALITY_MIN);
+            s_config.jpeg_quality = CAMERA_QUALITY_MIN;
+        } else if (s_config.jpeg_quality > CAMERA_QUALITY_MAX) {
+            s_config.jpeg_quality = CAMERA_QUALITY_MAX;
+        }
+        if (s_config.resolution != 0) {
+            ESP_LOGW(TAG, "Legacy resolution=%u clamped to VGA (DRAM constraint)",
+                     s_config.resolution);
+            s_config.resolution = 0;
+        }
         s_config_initialized = true;
         return ESP_OK;
     }
