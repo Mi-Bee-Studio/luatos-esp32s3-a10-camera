@@ -211,6 +211,17 @@ static void mjpeg_client_task(void *arg)
     int consecutive_failures = 0;
 
     while (1) {
+        /* 死客户端探测（2026-09-04 家族同步自 seeed）：本板无 PSRAM，
+         * 半开连接上 send() 永久阻塞会泄漏整个客户端任务（17h 实测漏 24 个
+         * ≈96KB 栈 → heap 最低 100B → httpd 饿死 → 自愈误杀重启）。
+         * 非阻塞 recv 探到 FIN/RST 立即退出走清理。 */
+        char probe;
+        int pr = recv(client_sock, &probe, 1, MSG_DONTWAIT);
+        if (pr == 0 || (pr < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+            ESP_LOGW(TAG, "Client disconnected (probe rv=%d errno=%d)", pr, errno);
+            break;
+        }
+
 #ifdef CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER
         /* Try broadcaster first (non-blocking, returns NOT_FOUND if no frame) */
         frame_ref_t *frame_ref = NULL;
@@ -313,6 +324,11 @@ static void mjpeg_listen_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
+
+        /* 发送超时兜底：TCP 零窗口客户端（连接着但不收数据）的 send() 会
+         * 长期阻塞。10s 超时让 send 失败走断开清理，与死客户端探测互补。 */
+        struct timeval snd_to = { .tv_sec = 10, .tv_usec = 0 };
+        setsockopt(client_sock, SOL_SOCKET, SO_SNDTIMEO, &snd_to, sizeof(snd_to));
 
         /* 满员时踢最旧连接（LRU）：shutdown 唤醒其阻塞 send/recv → 自行清理释放槽位。
          * 新连接（用户刚打开的页面）永远优先于滞留的旧连接 */
