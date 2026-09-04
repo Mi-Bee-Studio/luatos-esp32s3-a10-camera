@@ -4,6 +4,13 @@ MiBeeCam firmware for the **LuatOS ESP32-S3-A10** board (OV2640 / 8225N module).
 
 > **Sister projects**: `ai-thinker-esp32-cam`, `seeed-esp32s3-cam`, `esp32s3-n16r8-cam` (same Mi-Bee-Studio family). This is the **budget single-OTA variant** — do NOT copy their PSRAM config, ESP-IDF version, partition tables, or pin maps. See "What makes this board different" below.
 
+## AT command interface (family contract v1.0, 2026-09-04)
+
+统一契约：`docs/at-command.md`（四仓 md5 一致，地位同 api-contract）。核心集：
+`AT / AT+HELP / AT+GMR / AT+STATUS / AT+WIFI?|= / AT+IP? / AT+CAMRES?|= / AT+CAMQUAL?|= /
+AT+REBOOT / AT+RESTORE`（+能力裁剪项）。红线：**任何读指令不回显密码**；CAMQUAL 边界
+10-63（PIT-021）。本板串口 /dev/ttyACM1（CH343，开串口即复位）。CAMRES 仅 VGA（DRAM）、CAMQUAL 保存+重启；CWJAP/CWLAP 等为历史别名；AT+CFGGET 已对 *pass*/*secret* 键脱敏（2026-09-04 前可明文读 wifi_pass，曾用于一次性板间凭据迁移后即封）；实现于 main/at_command.c。
+
 ## What makes this board different (read first)
 
 This project diverges from the other S3 repos in ways that will silently break a build or boot if ignored:

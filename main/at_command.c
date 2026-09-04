@@ -35,6 +35,7 @@
 #include "driver/uart_vfs.h"
 
 #include "config_manager.h"
+#include "camera_driver.h"
 #include "wifi_manager.h"
 #include "health_monitor.h"
 #include "mjpeg_streamer.h"
@@ -541,9 +542,9 @@ static const config_field_t s_config_fields[] = {
     STRING_FIELD(web_password),
     STRING_FIELD(mdns_hostname),
     STRING_FIELD(webhook_url),
-    U8_FIELD(resolution,        0, 3),
+    U8_FIELD(resolution,        0, 0),   /* 本板锁定 VGA（DRAM 约束，PIT-012/021） */
     U8_FIELD(fps,               1, 30),
-    U8_FIELD(jpeg_quality,      1, 63),
+    U8_FIELD(jpeg_quality,      10, 63),  /* 家族画质下界（fb=w*h/5 预算，PIT-021） */
     U8_FIELD(motion_threshold,  1, 255),
     U8_FIELD(motion_cooldown,   1, 255),
     U8_FIELD(onvif_enabled,     0, 1),
@@ -615,6 +616,14 @@ static void handle_cfgget(const char *params)
     const config_field_t *f = find_config_field(params);
     if (!f) {
         at_error_msg("unknown field");
+        return;
+    }
+    /* 契约红线（docs/at-command.md §3）：任何读指令不得回显密码/密钥。
+     * 2026-09-04 前本命令可明文读 wifi_pass（曾用于一次性板间凭据迁移），
+     * 统一后从读路径剔除；写入仍走 AT+CFGSET。 */
+    if (strstr(f->name, "pass") || strstr(f->name, "password") ||
+        strstr(f->name, "secret")) {
+        at_error_msg("secret fields are write-only (AT+CFGSET)");
         return;
     }
 
@@ -745,8 +754,85 @@ static void handle_stream_query(const char *params)
 }
 
 /* ---------------------------------------------------------------------------
+ * Family-core handlers (docs/at-command.md v1.0, 2026-09-04)
+ * -------------------------------------------------------------------------*/
+
+/** AT+STATUS — consolidated status（家族核心，2026-09-04 新增） */
+static void handle_status(const char *params)
+{
+    (void)params;
+    const cam_config_t *cfg = config_get();
+    printf("Board:      LuatOS ESP32-S3-A10 (OV2640, no PSRAM)\r\n");
+    printf("Uptime:     %lld s\r\n", (long long)(esp_timer_get_time() / 1000000));
+    printf("Heap:       %lu / min %lu bytes\r\n",
+           (unsigned long)esp_get_free_heap_size(),
+           (unsigned long)esp_get_minimum_free_heap_size());
+    printf("WiFi:       %s\r\n", wifi_state_str(wifi_get_state()));
+    printf("SSID:       %s\r\n", cfg->wifi_ssid[0] ? cfg->wifi_ssid : "(none)");
+    printf("IP:         %s\r\n", wifi_get_ip_str());
+    printf("Camera:     res=%s quality=%u [%d-%d]\r\n",
+           cfg->resolution == 0 ? "VGA" : "?", cfg->jpeg_quality,
+           CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
+    at_ok();
+}
+
+/** AT+CAMRES? / AT+CAMRES=0 — 本板仅 VGA（DRAM 约束），无更高档可选 */
+static void handle_camres(const char *params)
+{
+    const cam_config_t *cfg = config_get();
+    if (params == NULL || params[0] == '?' || params[0] == '\0') {
+        printf("+CAMRES:%s (this board: VGA only, DRAM constraint PIT-012)\r\n",
+               cfg->resolution == 0 ? "VGA" : "?");
+        at_ok();
+        return;
+    }
+    if (atoi(params) != 0) {
+        at_error_msg("this board supports VGA only (DRAM constraint)");
+        return;
+    }
+    at_ok();
+}
+
+/** AT+CAMQUAL? / AT+CAMQUAL=n — 10-63，保存+重启应用（本板热重配竞态禁用） */
+static void handle_camqual(const char *params)
+{
+    cam_config_t newcfg = *config_get();
+    if (params == NULL || params[0] == '?' || params[0] == '\0') {
+        printf("+CAMQUAL:%u [%d-%d] (applies after reboot on this board)\r\n",
+               newcfg.jpeg_quality, CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
+        at_ok();
+        return;
+    }
+    int n = atoi(params);
+    if (n < CAMERA_QUALITY_MIN || n > CAMERA_QUALITY_MAX) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "quality must be %d-%d",
+                 CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
+        at_error_msg(msg);
+        return;
+    }
+    if (n == (int)newcfg.jpeg_quality) {
+        at_ok();
+        return;
+    }
+    newcfg.jpeg_quality = (uint8_t)n;
+    if (config_save(&newcfg) != ESP_OK) {
+        at_error_msg("save failed");
+        return;
+    }
+    /* 同 web POST /api/camera：本板热重配在并发取帧下致命（2026-09-03 实测），
+     * 保存+应答+1s 重启应用 */
+    printf("OK — quality=%d saved, rebooting to apply\r\n", n);
+    fflush(stdout);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
+}
+
+/* ---------------------------------------------------------------------------
  * Command registry
  * -------------------------------------------------------------------------*/
+
+static void handle_help(const char *params);   /* needs s_cmds → defined below table */
 
 typedef struct {
     const char *cmd;   /**< Command suffix (e.g., "+RST", "+CWJAP") */
@@ -757,7 +843,14 @@ static const at_cmd_entry_t s_cmds[] = {
     /* Basic commands */
     { "",                 handle_at          },   /* AT (no suffix) */
 
-    /* System commands */
+    /* System commands — 家族核心名在前（docs/at-command.md v1.0） */
+    { "+HELP",            handle_help        },
+    { "+STATUS",          handle_status      },
+    { "+REBOOT",          handle_rst         },
+    { "+CAMRES?",         handle_camres      },
+    { "+CAMRES=",         handle_camres      },
+    { "+CAMQUAL?",        handle_camqual     },
+    { "+CAMQUAL=",        handle_camqual     },
     { "+RST",             handle_rst         },
     { "+GMR",             handle_gmr         },
     { "+RESTORE",         handle_restore     },
@@ -771,6 +864,9 @@ static const at_cmd_entry_t s_cmds[] = {
     { "+CWJAP2?",         handle_cwjap2_query },
     { "+CWJAP2=",         handle_cwjap2_set   },
     { "+CWQAP",           handle_cwqap       },
+    { "+WIFI?",           handle_cwjap_query },   /* 家族核心名（CWJAP 为历史别名） */
+    { "+WIFI=",           handle_cwjap_set   },
+    { "+WIFISCAN",        handle_cwlap       },
     { "+CIFSR",           handle_cifsr       },
     { "+CWLAP",           handle_cwlap       },
 
@@ -787,6 +883,17 @@ static const at_cmd_entry_t s_cmds[] = {
     { "+STREAM?",         handle_stream_query },
 };
 static const int s_cmds_count = sizeof(s_cmds) / sizeof(s_cmds[0]);
+
+/** AT+HELP — list supported commands（家族核心，2026-09-04 新增） */
+static void handle_help(const char *params)
+{
+    (void)params;
+    printf("\r\nMiBeeCam AT commands (family contract v1.0):\r\n");
+    for (int i = 0; i < s_cmds_count; i++) {
+        printf("  AT%s\r\n", s_cmds[i].cmd);
+    }
+    at_ok();
+}
 
 /* ---------------------------------------------------------------------------
  * Command dispatch
