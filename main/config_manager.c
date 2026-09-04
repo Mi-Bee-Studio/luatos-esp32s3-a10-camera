@@ -16,7 +16,7 @@
 
 static const char *TAG = "config_manager";
 
-/* 契约 v1.1：家族统一默认管理密码（真实值仅存本地 sdkconfig，仓库只留占位默认） */
+/* 契约 v1.1：家族统一默认管理密码（公开默认 mibeecam2026，本地可在 gitignored sdkconfig 覆盖） */
 #define DEFAULT_WEB_PASSWORD CONFIG_MIBEE_CAM_DEFAULT_WEB_PASSWORD
 static const char *OLD_NVS_NAMESPACE = "device_cfg";
 static const char *NVS_NAMESPACE = "mibee_cfg";
