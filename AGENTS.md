@@ -165,7 +165,7 @@ Hold **BOOT** (GPIO 0) for 5 s → clears NVS, reboots into AP mode. (On `ai-thi
 > 构建期自动打包**（根 CMakeLists `spiffs_create_partition_image`），手动 spiffsgen 流程作废，
 > `idf.py flash` 即含 UI。
 >
-> **契约 v1.1（2026-09-02）**：统一默认密码（真实值仅存本地 sdkconfig `CONFIG_MIBEE_CAM_DEFAULT_WEB_PASSWORD`，严禁入库；空密码加载自动迁移）、拒绝 <6 位密码；
+> **契约 v1.1（2026-09-02）**：公开默认密码统一为 `mibeecam2026`（Kconfig 默认值，可入文档；本地部署可在 gitignored sdkconfig 用 `CONFIG_MIBEE_CAM_DEFAULT_WEB_PASSWORD` 覆盖；空密码加载自动迁移）、拒绝 <6 位密码；
 > api_version=1.1。
 > 改 UI 后必须重新生成并烧写 spiffs 分区。
 >
