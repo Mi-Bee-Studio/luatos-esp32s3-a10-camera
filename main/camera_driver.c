@@ -11,6 +11,7 @@
 #include "esp_camera.h"
 #include "img_converters.h"
 #include "driver/i2c_master.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -44,6 +45,7 @@ static const char *TAG = "camera_driver";
 static bool s_camera_initialized = false;
 static camera_resolution_t s_current_resolution = CAMERA_RES_VGA;
 static SemaphoreHandle_t s_camera_mutex = NULL;
+static const char *s_cap_source = "board";   /* 最近一次 effective 计算的钳制层 */
 
 /* ── Helpers ── */
 
@@ -68,6 +70,86 @@ static const char* resolution_to_string(camera_resolution_t res)
         default:              return "Unknown";
     }
 }
+
+/* ── 三层分辨率上限（sensor ∩ board ∩ memory，PIT-021 附录）─────────
+ * memory 层（本板是 DRAM 板，这层是关键防线）：esp32-camera 的 JPEG fb
+ * 按 宽*高/5 分配（cam_hal 同式），DRAM-only + fb_count=1 时预算 =
+ * fb_size，换档后须仍留 floor 给 WiFi/httpd/流任务。floor 校准依据
+ * （2026-09-03 实测）：VGA 单流稳态空闲 40-47K（流活跃可低至 21K）、
+ * health 告警线 15K；SVGA（fb 96K vs VGA 61K）即触发 PIT-012 堆枯竭
+ * 螺旋。稳态下本层独立复算出与板级常数一致的 VGA 上限。 */
+#define CAMERA_RES_MEM_FLOOR (32 * 1024)
+
+/* framesize → 尺寸表，下标 0 对应 FRAMESIZE_VGA（钉死 esp32-camera 2.1.x
+ * 枚举序；组件枚举漂移时由 _Static_assert 在构建期暴露） */
+static const struct { uint16_t w, h; } s_fs_dims[] = {
+    { 640,  480},  { 800,  600},  {1024,  768},  {1280,  720},  {1280, 1024},
+    {1600, 1200},  {1920, 1080},  { 720, 1280},  { 864, 1536},  {2048, 1536},
+    {2560, 1440},  {2560, 1600},  {1080, 1920},  {2560, 1920},  {2592, 1944},
+};
+_Static_assert(FRAMESIZE_VGA == 10, "s_fs_dims pinned to esp32-camera 2.1.x enum");
+
+static size_t fb_bytes_for_res(camera_resolution_t res)
+{
+    int idx = (int)res;
+    if (idx < 0 || (size_t)idx >= sizeof(s_fs_dims) / sizeof(s_fs_dims[0])) {
+        return 0;
+    }
+    return (size_t)s_fs_dims[idx].w * s_fs_dims[idx].h / 5;
+}
+
+static bool fb_budget_ok(camera_resolution_t res)
+{
+    size_t need = fb_bytes_for_res(res) * DEFAULT_FB_COUNT;
+    size_t cur_fb = s_camera_initialized
+        ? fb_bytes_for_res(s_current_resolution) * DEFAULT_FB_COUNT : 0;
+    /* fb_location=CAMERA_FB_IN_DRAM → fb 来自内部 DMA 域 */
+    size_t avail = heap_caps_get_free_size(MALLOC_CAP_DMA) + cur_fb;
+    return need != 0 && avail >= need + CAMERA_RES_MEM_FLOOR;
+}
+
+/** sensor 层：查 esp32-camera 组件自带能力表（单一事实源，勿手抄 PID 表）。
+ *  未初始化/未知 PID → 回退板级常数（不放宽）。 */
+static camera_resolution_t sensor_max_resolution(void)
+{
+    if (s_camera_initialized) {
+        sensor_t *s = esp_camera_sensor_get();
+        camera_sensor_info_t *info = s ? esp_camera_sensor_get_info(&s->id) : NULL;
+        if (info && (int)info->max_size >= (int)FRAMESIZE_VGA) {
+            int res = (int)info->max_size - (int)FRAMESIZE_VGA;
+            if (res > (int)CAMERA_RES_UXGA) {
+                res = (int)CAMERA_RES_UXGA;   /* 本地枚举天花板 */
+            }
+            return (camera_resolution_t)res;
+        }
+        ESP_LOGW(TAG, "Unknown sensor — sensor layer falls back to board max");
+    }
+    return CAMERA_RES_BOARD_MAX;
+}
+
+camera_resolution_t camera_get_effective_max_res(void)
+{
+    camera_resolution_t sensor_cap = sensor_max_resolution();
+    camera_resolution_t board_cap  = CAMERA_RES_BOARD_MAX;
+    camera_resolution_t cap = (sensor_cap < board_cap) ? sensor_cap : board_cap;
+    while (cap > CAMERA_RES_VGA && !fb_budget_ok(cap)) {
+        cap = (camera_resolution_t)((int)cap - 1);
+    }
+    if (cap == sensor_cap) {
+        s_cap_source = "sensor";
+    } else if (cap == board_cap) {
+        s_cap_source = "board";
+    } else {
+        s_cap_source = "memory";
+    }
+    return cap;
+}
+
+const char *camera_res_cap_source(void)
+{
+    return s_cap_source;
+}
+
 
 /* ── Public API ── */
 
@@ -169,7 +251,20 @@ esp_err_t camera_init(camera_resolution_t resolution, uint8_t fps, uint8_t jpeg_
     /* Retrieve sensor info */
     sensor_t *sensor = esp_camera_sensor_get();
     if (sensor != NULL) {
-        ESP_LOGI(TAG, "Camera: %s @ %s", sensor->id.PID == OV2640_PID ? "OV2640" : "Unknown",
+        /* 三层上限统一钳制（sensor ∩ board ∩ memory）。本板分辨率变更
+         * 走保存+重启（2026-09-03 热重配竞态封禁），此处钳的是 NVS 残留；
+         * OV2640 运行时 set_framesize 本身有效。 */
+        if (resolution > camera_get_effective_max_res()) {
+            ESP_LOGW(TAG, "Requested res %s exceeds effective max %s (source: %s), clamping",
+                     resolution_to_string(resolution),
+                     resolution_to_string(camera_get_effective_max_res()),
+                     camera_res_cap_source());
+            resolution = camera_get_effective_max_res();
+            if (sensor->set_framesize) {
+                sensor->set_framesize(sensor, resolution_to_framesize(resolution));
+            }
+        }
+        ESP_LOGI(TAG, "Camera: %s @ %s", camera_get_sensor_name(),
                  resolution_to_string(resolution));
 
         /* Configure sensor for desired frame rate */
@@ -268,11 +363,9 @@ const char* camera_get_sensor_name(void)
         return "Unknown";
     }
 
-    if (sensor->id.PID == OV2640_PID) {
-        return "OV2640";
-    }
-
-    return "Unknown";
+    /* 2026-09-04：改查组件能力表取名（换接其他传感器也能正确上报） */
+    camera_sensor_info_t *info = esp_camera_sensor_get_info(&sensor->id);
+    return info ? info->name : "Unknown";
 }
 
 camera_resolution_t camera_get_resolution(void)

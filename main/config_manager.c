@@ -479,7 +479,7 @@ esp_err_t config_init(void)
             s_config.jpeg_quality = CAMERA_QUALITY_MAX;
         }
         if (s_config.resolution != 0) {
-            ESP_LOGW(TAG, "Legacy resolution=%u clamped to VGA (DRAM constraint)",
+            ESP_LOGW(TAG, "Legacy resolution=%u clamped to VGA (board cap, DRAM constraint)",
                      s_config.resolution);
             s_config.resolution = 0;
         }

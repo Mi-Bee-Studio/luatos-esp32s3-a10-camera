@@ -776,18 +776,23 @@ static void handle_status(const char *params)
     at_ok();
 }
 
-/** AT+CAMRES? / AT+CAMRES=0 — 本板仅 VGA（DRAM 约束），无更高档可选 */
+/** AT+CAMRES? / AT+CAMRES=n — 三层上限（本板实际由 board 层钳在 VGA） */
 static void handle_camres(const char *params)
 {
     const cam_config_t *cfg = config_get();
+    int eff_max = (int)camera_get_effective_max_res();
     if (params == NULL || params[0] == '?' || params[0] == '\0') {
-        printf("+CAMRES:%s (this board: VGA only, DRAM constraint PIT-012)\r\n",
-               cfg->resolution == 0 ? "VGA" : "?");
+        printf("+CAMRES:%u  supported: 0-%d (cap source: %s)\r\n",
+               cfg->resolution, eff_max, camera_res_cap_source());
         at_ok();
         return;
     }
-    if (atoi(params) != 0) {
-        at_error_msg("this board supports VGA only (DRAM constraint)");
+    int n = atoi(params);
+    if (n < 0 || n > eff_max) {
+        char msg[80];
+        snprintf(msg, sizeof(msg), "resolution must be 0-%d (cap source: %s)",
+                 eff_max, camera_res_cap_source());
+        at_error_msg(msg);
         return;
     }
     at_ok();

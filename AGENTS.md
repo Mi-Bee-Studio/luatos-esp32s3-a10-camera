@@ -40,6 +40,10 @@ The v6.0.1 environment used by the sister repos will **not** reproduce this buil
 
 ## Build / flash / SPIFFS
 
+> **Flashing policy note (root AGENTS.md, 2026-09-04)**: the family rule is
+> Web-OTA-first; this repo is the **permanent exception** — single factory partition,
+> no OTA endpoint by design. USB below is the only delivery path here.
+
 ```bash
 idf.py set-target esp32s3
 idf.py build
@@ -135,6 +139,17 @@ Hold **BOOT** (GPIO 0) for 5 s → clears NVS, reboots into AP mode. (On `ai-thi
 > /api/camera 对齐：校验+保存+应答 `rebooting:true`+1s 重启；同值 POST 不重启。
 > NVS 加载钳制旧值（q<10→10，分辨率非 VGA→VGA）。`GET /api/camera` 新增
 > `quality_min/quality_max`，SPA 滑杆据此钳制。
+>
+> **2026-09-04 分辨率三层上限（家族统一，已烧录验证）**：上限从 web_server 的
+> 静态 VGA 表改为 `camera_get_effective_max_res() = min(sensor, board, memory)`
+> （camera_driver.c/h，细节见 PITFALLS PIT-021 附录）。board 层常数
+> `CAMERA_RES_BOARD_MAX=VGA`（PIT-012 实测：SVGA 触发堆枯竭螺旋，"能出图"≠
+> "能稳定带流"）；memory 层为内部 DRAM fb 预算校验（floor=32K 按 PIT-012
+> 实测校准，稳态独立复算出同样的 VGA；未来若出现内存宽裕板型此层自动放宽，
+> 但放宽 board 层前必须按家族流程重测）；sensor 层查组件能力表（OV2640→UXGA，
+> 换传感器自适应）。`GET /api/camera` 下发 `res_cap_source`（本板=board）；
+> POST /api/camera、/api/config、AT+CAMRES 校验从 `!=0` 硬编码改为 effective。
+> 另：仓内 esp32-camera 实际版本是 `~2.1.7`（下方差异表 "^2.0.0" 为旧信息）。
 
 ## REST API Endpoints
 
