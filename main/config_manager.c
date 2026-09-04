@@ -4,6 +4,7 @@
  */
 
 #include "config_manager.h"
+#include "sdkconfig.h"
 #include "camera_driver.h"
 #include "cJSON.h"
 #include "esp_log.h"
@@ -14,6 +15,9 @@
 #include "freertos/semphr.h"
 
 static const char *TAG = "config_manager";
+
+/* 契约 v1.1：家族统一默认管理密码（真实值仅存本地 sdkconfig，仓库只留占位默认） */
+#define DEFAULT_WEB_PASSWORD CONFIG_MIBEE_CAM_DEFAULT_WEB_PASSWORD
 static const char *OLD_NVS_NAMESPACE = "device_cfg";
 static const char *NVS_NAMESPACE = "mibee_cfg";
 static const char *NVS_CONFIG_KEY = "config";
@@ -61,7 +65,7 @@ static const cam_config_t s_default_config = {
     .resolution = 0,         // VGA
     .fps = 15,
     .jpeg_quality = 12,
-    .web_password = "***REMOVED-DEFAULT-PASSWORD***",   /* 契约 v1.1 家族统一默认 */
+    .web_password = DEFAULT_WEB_PASSWORD,   /* 契约 v1.1 家族统一默认 */
     .timezone = CONFIG_DEFAULT_TIMEZONE,
     .motion_threshold = 5,
     .motion_cooldown = 10,
@@ -357,7 +361,7 @@ static esp_err_t config_migrate_v2_to_v3(cam_config_t *config)
     strncpy(config->web_password, old_cfg.web_password, sizeof(config->web_password) - 1);
     /* 契约 v1.1：空密码迁移到家族统一默认（服务端已拒绝空密码写入） */
     if (config->web_password[0] == '\0') {
-        strncpy(config->web_password, "***REMOVED-DEFAULT-PASSWORD***", sizeof(config->web_password) - 1);
+        strncpy(config->web_password, DEFAULT_WEB_PASSWORD, sizeof(config->web_password) - 1);
     }
     config->web_password[sizeof(config->web_password) - 1] = '\0';
     strncpy(config->timezone, old_cfg.timezone, sizeof(config->timezone) - 1);
@@ -400,7 +404,7 @@ static void password_seed_once(void)
     }
     if (seeded == 1) return;
     ESP_LOGW(TAG, "One-shot password seed: unifying web_password to family default");
-    strncpy(s_config.web_password, "***REMOVED-DEFAULT-PASSWORD***", sizeof(s_config.web_password) - 1);
+    strncpy(s_config.web_password, DEFAULT_WEB_PASSWORD, sizeof(s_config.web_password) - 1);
     config_save(&s_config);
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
         nvs_set_u8(h, "pw_seed_v1", 1);
