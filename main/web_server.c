@@ -441,11 +441,14 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
         strncpy(new_cfg.device_name, item->valuestring, sizeof(new_cfg.device_name) - 1);
     if ((item = cJSON_GetObjectItem(root, "cam_framesize")) && cJSON_IsNumber(item)) {
         int val = (int)item->valuedouble;
-        /* 同 /api/camera 的实测封禁：>VGA 在本板触发堆枯竭螺旋（fb_count=1 DRAM） */
-        if (val != 0) {
+        /* 三层上限校验（同 /api/camera；本板实际由 board 层钳在 VGA） */
+        if (val < 0 || val > (int)camera_get_effective_max_res()) {
             cJSON_Delete(root);
-            return json_error(req, "cam_framesize: this board supports VGA only (DRAM constraint)",
-                             HTTPD_400_BAD_REQUEST);
+            char msg[96];
+            snprintf(msg, sizeof(msg),
+                     "cam_framesize out of range (0-%d, source: %s)",
+                     (int)camera_get_effective_max_res(), camera_res_cap_source());
+            return json_error(req, msg, HTTPD_400_BAD_REQUEST);
         }
         new_cfg.resolution = (uint8_t)val;
     }
@@ -978,20 +981,27 @@ static esp_err_t handler_api_camera_get(httpd_req_t *req)
     cJSON_AddNumberToObject(data, "quality_min",   (double)CAMERA_QUALITY_MIN);
     cJSON_AddNumberToObject(data, "quality_max",   (double)CAMERA_QUALITY_MAX);
 
-    /* 2026-09-03 实测封禁 >VGA：SVGA 使 cam_hal DMA 池 61KB→96KB（800×600/5），
-     * 空闲堆 45K→16K，暗光大帧再挤压 → 每秒分配失败、httpd 拒连、流 16s 断连螺旋。
-     * 本板（DRAM-only, fb_count=1）稳定档位只有 VGA。"能出图"≠"能稳定带流"。 */
-    cJSON *res_arr = cJSON_CreateArray();
-    static const struct { int value; const char *label; } res_list[] = {
-        { 0, "VGA (640x480)" },
-    };
-    for (size_t i = 0; i < sizeof(res_list) / sizeof(res_list[0]); i++) {
-        cJSON *item = cJSON_CreateObject();
-        cJSON_AddStringToObject(item, "label", res_list[i].label);
-        cJSON_AddNumberToObject(item, "value", res_list[i].value);
-        cJSON_AddItemToArray(res_arr, item);
+    /* 三层分辨率上限（2026-09-04 家族统一）：sensor ∩ board ∩ memory。
+     * 板级常数 VGA 的实测依据（2026-09-03）：SVGA 使 cam_hal DMA 池
+     * 61KB→96KB（800×600/5），空闲堆 45K→16K，暗光大帧再挤压 → 每秒
+     * 分配失败、httpd 拒连、流 16s 断连螺旋（PIT-012）。"能出图"≠"能
+     * 稳定带流"。详见 camera_driver.h CAMERA_RES_BOARD_MAX 注。 */
+    {
+        static const char *res_labels[] = {
+            "VGA (640x480)", "SVGA (800x600)", "XGA (1024x768)", "UXGA (1600x1200)",
+        };
+        int eff_max = (int)camera_get_effective_max_res();
+        cJSON *res_arr = cJSON_CreateArray();
+        for (int i = 0; i <= eff_max && i < 4; i++) {
+            cJSON *item = cJSON_CreateObject();
+            cJSON_AddStringToObject(item, "label", res_labels[i]);
+            cJSON_AddNumberToObject(item, "value", i);
+            cJSON_AddItemToArray(res_arr, item);
+        }
+        cJSON_AddItemToObject(data, "supported_resolutions", res_arr);
+        /* 契约扩展（2026-09-04）：上限被哪一层钳制（sensor/board/memory） */
+        cJSON_AddStringToObject(data, "res_cap_source", camera_res_cap_source());
     }
-    cJSON_AddItemToObject(data, "supported_resolutions", res_arr);
 
     return json_ok(req, data);
 }
@@ -1019,11 +1029,14 @@ static esp_err_t handler_api_camera_post(httpd_req_t *req)
     cJSON *fs = cJSON_GetObjectItem(json, "cam_framesize");
     if (fs && cJSON_IsNumber(fs)) {
         int val = (int)fs->valuedouble;
-        /* 同 GET 端点的实测封禁：>VGA 在本板触发堆枯竭螺旋（详见 GET 注释） */
-        if (val != 0) {
+        /* 三层上限校验（同 GET 端点；本板实际由 board 层钳在 VGA） */
+        if (val < 0 || val > (int)camera_get_effective_max_res()) {
             cJSON_Delete(json);
-            return json_error(req, "cam_framesize: this board supports VGA only (DRAM constraint)",
-                             HTTPD_400_BAD_REQUEST);
+            char msg[96];
+            snprintf(msg, sizeof(msg),
+                     "cam_framesize out of range (0-%d, source: %s)",
+                     (int)camera_get_effective_max_res(), camera_res_cap_source());
+            return json_error(req, msg, HTTPD_400_BAD_REQUEST);
         }
         newcfg.resolution = (uint8_t)val;
     }
