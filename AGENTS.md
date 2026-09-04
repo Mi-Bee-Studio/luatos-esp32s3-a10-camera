@@ -251,3 +251,12 @@ This board returns the following from `GET /api/capabilities`:
 - Re-enable WPA3/AMPDU without re-validating WiFi stability on this board.
 - Commit `sdkconfig`, `managed_components/`, or `build/`.
 - Assume the LuatOS docs pinout — use `CAMERA_MODEL_Air_ESP32S3`.
+
+## 2026-09-04 上午：MJPEG 客户端任务泄漏修复（PIT-024）
+- **症状链**：半开连接上 `send()` 永久阻塞 → 客户端任务/栈/槽位泄漏
+  （17h 漏 24 个 ≈96KB，Min Heap 一度 100B）→ httpd 饿死 → 自愈误杀重启。
+- **修复（已上板验证：堆 40-47KB 稳定 15min+，Min Heap 9108，低堆告警绝迹）**：
+  流循环头部移植 seeed 的死客户端探测（`recv(MSG_DONTWAIT)` 探 FIN/RST 即退），
+  accept 后 `SO_SNDTIMEO=10s` 兜底零窗口。
+- 教训：单仓修的家族缺陷必须当天评估姐妹仓同函数形态——seeed 有探测本仓没有，正是坑因。
+- 统一 logo favicon.svg（四仓同 md5）；web_ui 新增文件需 `idf.py reconfigure`（PIT-026）。
