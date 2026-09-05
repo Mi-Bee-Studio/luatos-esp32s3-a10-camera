@@ -1,1117 +1,551 @@
-/**
- * @file at_command.c
- * @brief AT command interface implementation for MiBeeCam ESP32-S3-A10.
+/*
+ * at_command.c — MiBee Cam 家族 AT 控制台核心（契约 v1.1，2026-09-05）
  *
- * Implements 18 AT commands for serial-port device control:
- *   AT, AT+RST, AT+GMR, AT+RESTORE, AT+HEAP, AT+UPTIME, AT+TEMP,
- *   AT+CWJAP?, AT+CWJAP=, AT+CWQAP, AT+CIFSR, AT+CWLAP,
- *   AT+NAME?, AT+NAME=, AT+CFGGET=, AT+CFGSET=, AT+SAVE, AT+STREAM?
+ * 四仓共享同一份核心（md5 纪律，docs/at-command.md §0）：解析器、指令表、
+ * 响应框架（`+NAME:内容` 数据行 / `OK` / `ERROR: 原因`）、HELP 自动生成。
+ * 一切板差异（IO 后端、能力裁剪、生效语义、§5 扩展指令）在 main/at_port.c。
  *
- * Architecture:
- *   - UART0 driver installed (or reused from console) for stdin/stdout
- *   - Dedicated FreeRTOS task reads lines and dispatches to handlers
- *   - Command table: static array of {cmd_string, handler_fn} entries
- *   - Response helpers: at_ok(), at_error(), at_error_msg(), at_send()
+ * 传输约定（契约 §1）：输入大小写不敏感；非 AT 行静默忽略（与 ESP_LOG
+ * 共口时不刷屏）；参数区分大小写。
  */
-
-#include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
+#include <strings.h>
 #include <stdlib.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <ctype.h>
-
-#include "esp_log.h"
-#include "esp_system.h"
-#include "esp_timer.h"
-#include "esp_err.h"
-#include "esp_chip_info.h"
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_app_desc.h"
+#include "esp_chip_info.h"
+#include "esp_timer.h"
 
-#include "driver/uart.h"
-#include "driver/uart_vfs.h"
-
-#include "config_manager.h"
-#include "camera_driver.h"
-#include "wifi_manager.h"
-#include "health_monitor.h"
-#include "mjpeg_streamer.h"
-#include "motion_detect.h"
 #include "at_command.h"
+#include "at_port.h"
 
-/* ---------------------------------------------------------------------------
- * Module constants
- * -------------------------------------------------------------------------*/
+static void at_status_emit_trampoline(const char *name, const char *value);
+static void at_scan_emit_trampoline(const char *ssid, int32_t rssi, int32_t auth);
+
 static const char *TAG = "at_cmd";
 
-#define AT_LINE_MAX        256
-#define AT_CMD_BUF_MAX     64
-#define AT_FIELD_MAX       64
-#define AT_VALUE_MAX       128
+#define AT_LINE_MAX     160
+#define AT_TASK_STACK   4096
+#define AT_TASK_PRIO    5
+#define AT_SETTLE_MS    3000   /* 上电静默期：让启动日志先走完 */
 
-/* WiFi scan max APs */
-#define AT_SCAN_MAX_APS    15
+/* ── 输出（port 后端） ─────────────────────────────────────────── */
 
-/* ---------------------------------------------------------------------------
- * Module-global state
- * -------------------------------------------------------------------------*/
-static volatile bool s_running = false;
+static void at_out(const char *s)
+{
+    at_port_write(s);
+}
 
-/* ---------------------------------------------------------------------------
- * Response helpers
- * -------------------------------------------------------------------------*/
-
-/** Print \r\nOK\r\n */
 static void at_ok(void)
 {
-    printf("\r\nOK\r\n");
+    at_out("OK\r\n");
 }
 
-/** Print \r\nERROR\r\n */
-static void at_error(void)
+static void at_error(const char *reason)
 {
-    printf("\r\nERROR\r\n");
-}
-
-/** Print \r\nERROR: <msg>\r\n */
-static void at_error_msg(const char *msg)
-{
-    printf("\r\nERROR: %s\r\n", msg ? msg : "unknown");
-}
-
-/**
- * @brief Print a formatted response line.
- * Output: \r\n<fmt...>\r\n
- */
-static void at_send(const char *fmt, ...)
-{
-    va_list args;
-    printf("\r\n");
-    va_start(args, fmt);
-    vprintf(fmt, args);
-    va_end(args);
-    printf("\r\n");
-}
-
-/* ---------------------------------------------------------------------------
- * Command handlers — one per AT command
- * -------------------------------------------------------------------------*/
-
-/**
- * Handler for: AT  (test command, no params)
- */
-static void handle_at(const char *params)
-{
-    (void)params;
-    at_ok();
-}
-
-/**
- * Handler for: AT+RST  (reboot device)
- */
-static void handle_rst(const char *params)
-{
-    (void)params;
-    ESP_LOGI(TAG, "AT+RST: rebooting");
-    at_ok();
-    vTaskDelay(pdMS_TO_TICKS(100));
-    esp_restart();
-}
-
-/**
- * Handler for: AT+GMR  (firmware version info)
- */
-static void handle_gmr(const char *params)
-{
-    (void)params;
-    esp_chip_info_t chip_info;
-    esp_chip_info(&chip_info);
-
-    const char *chip_model_str;
-    switch (chip_info.model) {
-    case CHIP_ESP32:    chip_model_str = "ESP32";    break;
-    case CHIP_ESP32S2:  chip_model_str = "ESP32-S2";  break;
-    case CHIP_ESP32S3:  chip_model_str = "ESP32-S3";  break;
-    case CHIP_ESP32C3:  chip_model_str = "ESP32-C3";  break;
-    case CHIP_ESP32H2:  chip_model_str = "ESP32-H2";  break;
-    case CHIP_ESP32C2:  chip_model_str = "ESP32-C2";  break;
-    case CHIP_ESP32C6:  chip_model_str = "ESP32-C6";  break;
-    case CHIP_ESP32P4:  chip_model_str = "ESP32-P4";  break;
-    default:            chip_model_str = "Unknown";   break;
+    char buf[96];
+    if (reason && reason[0]) {
+        snprintf(buf, sizeof(buf), "ERROR: %s\r\n", reason);
+    } else {
+        snprintf(buf, sizeof(buf), "ERROR\r\n");
     }
-
-    printf("\r\n");
-    printf("Firmware: MiBeeCam v0.2.0\r\n");
-    printf("Build: %s %s\r\n", __DATE__, __TIME__);
-    printf("IDF: %s\r\n", esp_get_idf_version());
-    printf("Chip: %s Rev %d\r\n", chip_model_str, chip_info.revision);
-    at_ok();
+    at_out(buf);
 }
 
-/**
- * Handler for: AT+RESTORE  (factory reset + reboot)
- */
-static void handle_restore(const char *params)
+static void at_data(const char *name, const char *fmt, ...)
 {
-    (void)params;
-    ESP_LOGW(TAG, "AT+RESTORE: factory reset");
-    config_reset();
-    at_ok();
-    vTaskDelay(pdMS_TO_TICKS(500));
-    esp_restart();
+    char body[128];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(body, sizeof(body), fmt, ap);
+    va_end(ap);
+
+    char line[160];
+    snprintf(line, sizeof(line), "+%s: %s\r\n", name, body);
+    at_out(line);
 }
 
-/**
- * Handler for: AT+HEAP  (heap usage info)
- */
-static void handle_heap(const char *params)
+/* ── 家族刻度 framesize_t 值 → 短名（契约 v1.3 §5） ───────────── */
+
+static const char *at_framesize_label(int v)
 {
-    (void)params;
-    size_t current_free, baseline_free, baseline_min;
-    bool warning;
-
-    health_check_threshold(&current_free, &warning);
-    health_get_baselines(&baseline_free, &baseline_min);
-    size_t min_ever = esp_get_minimum_free_heap_size();
-
-    printf("\r\n");
-    printf("Free: %u bytes\r\n", (unsigned)current_free);
-    printf("Min: %u bytes\r\n", (unsigned)min_ever);
-    printf("Baseline: %u bytes\r\n", (unsigned)baseline_free);
-    at_ok();
-}
-
-/**
- * Handler for: AT+UPTIME  (uptime in seconds)
- */
-static void handle_uptime(const char *params)
-{
-    (void)params;
-    uint32_t uptime_s = (uint32_t)(esp_timer_get_time() / 1000000ULL);
-    printf("\r\n");
-    printf("Uptime: %u seconds\r\n", (unsigned)uptime_s);
-    at_ok();
-}
-
-/**
- * Handler for: AT+TEMP  (chip temperature)
- */
-static void handle_temp(const char *params)
-{
-    (void)params;
-    float temp = get_chip_temp();
-    int int_part = (int)temp;
-    int dec_part = (int)((temp - int_part) * 100.0f);
-    if (dec_part < 0) dec_part = -dec_part;
-
-    printf("\r\n");
-    printf("Temp: %d.%02d C\r\n", (int)temp, dec_part);
-    at_ok();
-}
-
-/* ---------------------------------------------------------------------------
- * WiFi state to string mapping
- * -------------------------------------------------------------------------*/
-static const char *wifi_state_str(wifi_state_t state)
-{
-    switch (state) {
-    case WIFI_STATE_AP:               return "AP";
-    case WIFI_STATE_STA_CONNECTING:   return "CONNECTING";
-    case WIFI_STATE_STA_CONNECTED:    return "CONNECTED";
-    case WIFI_STATE_STA_DISCONNECTED: return "DISCONNECTED";
-    case WIFI_STATE_STA_FAILED:       return "FAILED";
-    default:                          return "UNKNOWN";
+    switch (v) {
+        case 10: return "VGA";
+        case 11: return "SVGA";
+        case 12: return "XGA";
+        case 13: return "HD";
+        case 14: return "SXGA";
+        case 15: return "UXGA";
+        default: return "UNKNOWN";
     }
 }
 
-/**
- * Handler for: AT+CWJAP?  (query current WiFi connection)
- */
-static void handle_cwjap_query(const char *params)
-{
-    (void)params;
-    const cam_config_t *cfg = config_get();
+/* ── 核心指令实现 ──────────────────────────────────────────────── */
 
-    printf("\r\n");
-    printf("State: %s\r\n", wifi_state_str(wifi_get_state()));
-    printf("SSID: %s\r\n", cfg->wifi_ssid[0] ? cfg->wifi_ssid : "(none)");
-    printf("IP: %s\r\n", wifi_get_ip_str());
-    at_ok();
+static void cmd_gmr(void)
+{
+    const esp_app_desc_t *app = esp_app_get_description();
+    esp_chip_info_t chip;
+    esp_chip_info(&chip);
+    const char *chip_name = "ESP32";
+    switch (chip.model) {
+        case CHIP_ESP32:    chip_name = "ESP32";    break;
+        case CHIP_ESP32S2:  chip_name = "ESP32-S2"; break;
+        case CHIP_ESP32S3:  chip_name = "ESP32-S3"; break;
+        case CHIP_ESP32C3:  chip_name = "ESP32-C3"; break;
+        default: break;
+    }
+    at_gmr_info_t g;
+    at_port_gmr_info(&g);
+
+    /* 契约 v1.1：GMR 必须报 esp_app_desc 实际版本，禁止硬编码 */
+    at_data("GMR", "fw:%s", (app && app->version[0]) ? app->version : "unknown");
+    at_data("GMR", "chip:%s rev:%u", chip_name, (unsigned)chip.revision);
+    at_data("GMR", "board:%s", g.board);
+    at_data("GMR", "sensor:%s", g.sensor);
 }
 
-/**
- * @brief Strip enclosing double quotes from a string in-place.
- *        Modifies the string if quoted; otherwise returns it unchanged.
- */
-static char *strip_quotes(char *s)
+static void cmd_wifi_query(void)
 {
-    if (!s) return s;
-    size_t len = strlen(s);
-    if (len >= 2 && s[0] == '"' && s[len - 1] == '"') {
-        s[len - 1] = '\0';
-        return s + 1;
-    }
-    return s;
+    at_wifi_info_t w;
+    at_port_wifi_info(&w);
+    at_data("WIFI", "state:%s", w.state);
+    at_data("WIFI", "ssid:%s", w.ssid[0] ? w.ssid : "(unset)");
+    at_data("WIFI", "ip:%s", w.ip[0] ? w.ip : "0.0.0.0");
+    /* 红线（契约 §3）：任何读指令不回显密码 */
 }
 
-/**
- * Handler for: AT+CWJAP=<ssid>,<pwd>  (set WiFi and connect)
- *
- * Parse format: ssid,pwd  or  "ssid","pwd"
- * Splits on first comma (ssid may contain commas if quoted?  No — standard
- * AT format splits on first comma as field delimiter).
- */
-static void handle_cwjap_set(const char *params)
+static void cmd_wifi_set(const char *args)
 {
-    if (!params || params[0] == '\0') {
-        at_error();
-        return;
-    }
-
-    /* Copy params to a mutable buffer */
-    char buf[AT_LINE_MAX];
-    strncpy(buf, params, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-
-    /* Split on first comma: ssid,pwd */
-    char *comma = strchr(buf, ',');
+    /* AT+WIFI=ssid,pass：首个逗号前为 ssid，其后整体为 pass（pass 可含逗号） */
+    const char *comma = strchr(args, ',');
     if (!comma) {
-        at_error_msg("missing password");
+        at_error("usage: AT+WIFI=ssid,pass");
         return;
     }
-    *comma = '\0';
-    char *ssid_str = buf;
-    char *pwd_str  = comma + 1;
-
-    /* Strip quotes */
-    ssid_str = strip_quotes(ssid_str);
-    pwd_str  = strip_quotes(pwd_str);
-
-    /* Validate lengths */
-    if (strlen(ssid_str) == 0) {
-        at_error_msg("SSID empty");
+    char ssid[33];
+    size_t ssid_len = (size_t)(comma - args);
+    if (ssid_len == 0 || ssid_len >= sizeof(ssid)) {
+        at_error("invalid ssid");
         return;
     }
-    if (strlen(ssid_str) > 32) {
-        at_error_msg("SSID too long (max 32)");
+    memcpy(ssid, args, ssid_len);
+    ssid[ssid_len] = '\0';
+    const char *pass = comma + 1;
+    if (!pass[0]) {
+        at_error("empty password");
         return;
     }
-    if (strlen(pwd_str) > 64) {
-        at_error_msg("password too long (max 64)");
-        return;
-    }
-
-    /* Copy config from current, overwrite wifi fields */
-    cam_config_t cfg;
-    config_get_copy(&cfg);
-    strncpy(cfg.wifi_ssid, ssid_str, sizeof(cfg.wifi_ssid) - 1);
-    cfg.wifi_ssid[sizeof(cfg.wifi_ssid) - 1] = '\0';
-    strncpy(cfg.wifi_pass, pwd_str, sizeof(cfg.wifi_pass) - 1);
-    cfg.wifi_pass[sizeof(cfg.wifi_pass) - 1] = '\0';
-
-    esp_err_t ret = config_set(&cfg);
+    esp_err_t ret = at_port_wifi_set(ssid, pass);
     if (ret != ESP_OK) {
-        at_error();
+        at_error("save failed");
         return;
     }
+    at_ok();   /* 生效方式随板（§6）；port 需要时已打印 +REBOOTING 等行 */
+}
 
-    /* Start STA mode */
-    /* Stop WiFi retry timer before connecting (prevent state machine desync) */
-    wifi_stop_retry();
-    ret = wifi_start_sta(ssid_str, pwd_str);
+static void cmd_wifi_scan(void)
+{
+    esp_err_t ret = at_port_wifi_scan(at_scan_emit_trampoline);
     if (ret == ESP_OK) {
         at_ok();
     } else {
-        at_error();
+        at_error("scan failed");
     }
 }
 
-/**
- * Handler for: AT+CWJAP2?  (query backup WiFi configuration)
- */
-static void handle_cwjap2_query(const char *params)
+/* port 扫描回抛 → +AP: 行（核心统一格式） */
+static void at_scan_emit_trampoline(const char *ssid, int32_t rssi, int32_t auth)
 {
-    (void)params;
-    const cam_config_t *cfg = config_get();
-    printf("\r\n");
-    printf("Backup SSID: %s\r\n", cfg->wifi_ssid_2[0] ? cfg->wifi_ssid_2 : "(none)");
-    printf("Active SSID: %s\r\n", cfg->wifi_ssid);
-    printf("Backup status: %s\r\n", cfg->wifi_ssid_2[0] ? "configured" : "not set");
-    at_ok();
+    at_data("AP", "%s,%ld,%ld", ssid, (long)rssi, (long)auth);
 }
 
-/**
- * Handler for: AT+CWJAP2=<ssid>,<pwd>  (set backup WiFi credentials)
- */
-static void handle_cwjap2_set(const char *params)
+static void cmd_ip_query(void)
 {
-    if (!params || params[0] == '\0') {
-        at_error();
-        return;
-    }
-
-    /* Copy params to a mutable buffer */
-    char buf[AT_LINE_MAX];
-    strncpy(buf, params, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-
-    /* Split on first comma: ssid,pwd */
-    char *comma = strchr(buf, ',');
-    if (!comma) {
-        at_error_msg("missing password");
-        return;
-    }
-    *comma = '\0';
-    char *ssid_str = buf;
-    char *pwd_str  = comma + 1;
-
-    /* Strip quotes */
-    ssid_str = strip_quotes(ssid_str);
-    pwd_str  = strip_quotes(pwd_str);
-
-    /* Validate lengths */
-    if (strlen(ssid_str) == 0) {
-        at_error_msg("SSID empty");
-        return;
-    }
-    if (strlen(ssid_str) > 32) {
-        at_error_msg("SSID too long (max 32)");
-        return;
-    }
-    if (strlen(pwd_str) > 64) {
-        at_error_msg("password too long (max 64)");
-        return;
-    }
-
-    /* Copy config from current, overwrite backup wifi fields */
-    cam_config_t cfg;
-    config_get_copy(&cfg);
-    strncpy(cfg.wifi_ssid_2, ssid_str, sizeof(cfg.wifi_ssid_2) - 1);
-    cfg.wifi_ssid_2[sizeof(cfg.wifi_ssid_2) - 1] = '\0';
-    strncpy(cfg.wifi_pass_2, pwd_str, sizeof(cfg.wifi_pass_2) - 1);
-    cfg.wifi_pass_2[sizeof(cfg.wifi_pass_2) - 1] = '\0';
-
-    esp_err_t ret = config_set(&cfg);
-    if (ret == ESP_OK) {
-        at_ok();
-    } else {
-        at_error();
-    }
+    at_wifi_info_t w;
+    at_port_wifi_info(&w);
+    at_data("IP", "ip:%s", w.ip[0] ? w.ip : "0.0.0.0");
+    if (w.mask[0]) at_data("IP", "mask:%s", w.mask);
+    if (w.gw[0])   at_data("IP", "gw:%s", w.gw);
 }
 
-/**
- * Handler for: AT+CWQAP  (disconnect STA, switch to AP)
- */
-static void handle_cwqap(const char *params)
+static void cmd_status(void)
 {
-    (void)params;
-    esp_err_t ret = wifi_start_ap();
-    if (ret == ESP_OK) {
-        at_ok();
-    } else {
-        at_error();
+    char buf[32];
+    uint64_t us = esp_timer_get_time();
+    snprintf(buf, sizeof(buf), "%lus", (unsigned long)(us / 1000000ULL));
+    at_data("STATUS", "uptime:%s", buf);
+    snprintf(buf, sizeof(buf), "%u", (unsigned)(esp_get_free_heap_size() / 1024));
+    at_data("STATUS", "heap:%sKB", buf);
+
+    at_wifi_info_t w;
+    at_port_wifi_info(&w);
+    at_data("STATUS", "wifi:%s", w.state);
+    at_data("STATUS", "ssid:%s", w.ssid[0] ? w.ssid : "(unset)");
+    at_data("STATUS", "ip:%s", w.ip[0] ? w.ip : "0.0.0.0");
+
+    at_gmr_info_t g;
+    at_port_gmr_info(&g);
+    at_data("STATUS", "sensor:%s", g.sensor);
+
+    at_cam_res_info_t r;
+    if (at_port_cam_res_info(&r)) {
+        at_data("STATUS", "res:%s", at_framesize_label(r.cur));
     }
+    int qmin = 0, qmax = 0;
+    int q = at_port_cam_qual_get(&qmin, &qmax);
+    at_data("STATUS", "qual:%d [%d-%d]", q, qmin, qmax);
+
+    /* 板级增量行（+TEMP: / +STREAM: 等） */
+    at_port_status_extra(at_status_emit_trampoline);
 }
 
-/**
- * Handler for: AT+CIFSR  (get IP address)
- */
-static void handle_cifsr(const char *params)
+static void at_status_emit_trampoline(const char *name, const char *value)
 {
-    (void)params;
-    at_send("+CIFSR:%s", wifi_get_ip_str());
-    at_ok();
+    at_data("STATUS", "%s:%s", name, value);
 }
 
-/**
- * Handler for: AT+CWLAP  (scan WiFi networks)
- *
- * Blocking call ~1-2 seconds. Only available when
- * CONFIG_MIBEECAM_ENABLE_WIFI_SCAN is enabled.
- */
-static void handle_cwlap(const char *params)
+static void cmd_camres_query(void)
 {
-    (void)params;
-#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
-    wifi_ap_record_t results[AT_SCAN_MAX_APS];
-    uint16_t found = 0;
-
-    esp_err_t ret = wifi_scan(results, AT_SCAN_MAX_APS, &found);
-    if (ret != ESP_OK) {
-        at_error();
+    at_cam_res_info_t r;
+    if (!at_port_cam_res_info(&r)) {
+        at_error("camera not ready");
         return;
     }
-
-    for (uint16_t i = 0; i < found; i++) {
-        at_send("+CWLAP:%s,%d,%d",
-                results[i].ssid,
-                results[i].rssi,
-                results[i].authmode);
+    at_data("CAMRES", "%d %s", r.cur, at_framesize_label(r.cur));
+    /* 列表与 GET /api/camera supported_resolutions 同源 */
+    char list[160] = {0};
+    size_t used = 0;
+    for (int i = 0; i < r.opt_count && used + 24 < sizeof(list); i++) {
+        used += snprintf(list + used, sizeof(list) - used, "%s%d=%s",
+                         i ? "," : "", r.opts[i].value, at_framesize_label(r.opts[i].value));
     }
-    at_ok();
-#else
-    at_error_msg("WiFi scan not enabled");
-#endif
+    at_data("CAMLIST", "%s", list);
+    at_data("CAMCAP", "%d %s (source: %s)", r.cap, at_framesize_label(r.cap), r.cap_source);
 }
 
-/**
- * Handler for: AT+NAME?  (get device name)
- */
-static void handle_name_query(const char *params)
+static void cmd_camres_set(const char *args)
 {
-    (void)params;
-    const cam_config_t *cfg = config_get();
-    at_send("+NAME:%s", cfg->device_name);
-    at_ok();
-}
-
-/**
- * Handler for: AT+NAME=<name>  (set device name)
- */
-static void handle_name_set(const char *params)
-{
-    if (!params || params[0] == '\0') {
-        at_error_msg("name empty");
+    char *end = NULL;
+    long v = strtol(args, &end, 10);
+    if (end == args || *end != '\0') {
+        at_error("usage: AT+CAMRES=n");
         return;
     }
-
-    char buf[AT_LINE_MAX];
-    strncpy(buf, params, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-
-    char *name = strip_quotes(buf);
-
-    if (strlen(name) > 32) {
-        at_error_msg("name too long (max 32)");
-        return;
-    }
-    if (strlen(name) == 0) {
-        at_error_msg("name empty");
-        return;
-    }
-
-    cam_config_t cfg;
-    config_get_copy(&cfg);
-    strncpy(cfg.device_name, name, sizeof(cfg.device_name) - 1);
-    cfg.device_name[sizeof(cfg.device_name) - 1] = '\0';
-
-    esp_err_t ret = config_set(&cfg);
-    if (ret == ESP_OK) {
-        at_ok();
-    } else {
-        at_error();
-    }
-}
-
-/* ---------------------------------------------------------------------------
- * Config field metadata table (for CFGGET / CFGSET)
- * -------------------------------------------------------------------------*/
-
-/** Field types for config get/set */
-typedef enum {
-    FIELD_TYPE_STRING,
-    FIELD_TYPE_U8,
-    FIELD_TYPE_U16,
-} field_type_t;
-
-typedef struct {
-    const char *name;
-    field_type_t type;
-    size_t offset;
-    size_t max_len;       /* for strings: max length including null */
-    long min_val;         /* for U8/U16: minimum */
-    long max_val;         /* for U8/U16: maximum */
-} config_field_t;
-
-#define STRING_FIELD(field) \
-    { #field, FIELD_TYPE_STRING, offsetof(cam_config_t, field), sizeof(((cam_config_t*)0)->field), 0, 0 }
-
-#define U8_FIELD(field, minv, maxv) \
-    { #field, FIELD_TYPE_U8, offsetof(cam_config_t, field), 0, minv, maxv }
-
-#define U16_FIELD(field, minv, maxv) \
-    { #field, FIELD_TYPE_U16, offsetof(cam_config_t, field), 0, minv, maxv }
-
-/* CFGGET/CFGSET 白名单（PIT-022 second-fox：字段改名后表必须同步）。
- * 键名 = 契约 JSON 名；xclk_freq_mhz 域 {10,16,20} 非连续，不入表。 */
-static const config_field_t s_config_fields[] = {
-    STRING_FIELD(wifi_ssid),
-    STRING_FIELD(wifi_pass),
-    STRING_FIELD(wifi_ssid_2),
-    STRING_FIELD(wifi_pass_2),
-    STRING_FIELD(device_name),
-    STRING_FIELD(server_url),
-    STRING_FIELD(timezone),
-    STRING_FIELD(web_password),
-    STRING_FIELD(mdns_hostname),
-    STRING_FIELD(alert_webhook_url),
-    STRING_FIELD(webhook_secret),
-    U8_FIELD(cam_framesize,        10, 10),  /* 家族刻度；本板锁定 VGA（DRAM 约束，PIT-012/021） */
-    U8_FIELD(cam_fps,               1, 30),
-    U8_FIELD(cam_quality,          10, 63),  /* 家族画质下界（fb=w*h/5 预算，PIT-021） */
-    U8_FIELD(cam_vflip,             0, 1),
-    U8_FIELD(cam_hmirror,           0, 1),
-    U8_FIELD(motion_enabled,        0, 1),
-    U8_FIELD(motion_sensitivity,    0, 100),
-    U16_FIELD(motion_cooldown_s,    1, 300),
-    U8_FIELD(motion_active_interval_s, 1, 30),
-    U8_FIELD(onvif_enable,          0, 1),
-    U8_FIELD(ws_enable,             0, 1),
-    U8_FIELD(alert_webhook_enabled, 0, 1),
-};
-static const int s_config_fields_count = sizeof(s_config_fields) / sizeof(s_config_fields[0]);
-
-/** Find a config field descriptor by name, or return NULL. */
-static const config_field_t *find_config_field(const char *name)
-{
-    for (int i = 0; i < s_config_fields_count; i++) {
-        if (strcmp(s_config_fields[i].name, name) == 0) {
-            return &s_config_fields[i];
+    esp_err_t ret = at_port_cam_res_set((int)v);
+    if (ret == ESP_ERR_INVALID_ARG) {
+        at_cam_res_info_t r;
+        int cap = 0;
+        const char *src = "board";
+        if (at_port_cam_res_info(&r)) {
+            cap = r.cap;
+            src = r.cap_source;
         }
-    }
-    return NULL;
-}
-
-/**
- * Get a pointer to a config field value given its descriptor.
- */
-static const void *config_field_ptr(const cam_config_t *cfg, const config_field_t *f)
-{
-    return (const uint8_t *)cfg + f->offset;
-}
-
-/**
- * Set a config field value from a string.
- * Returns ESP_OK on success, ESP_ERR_INVALID_ARG on bad value.
- */
-static esp_err_t config_field_set_from_str(cam_config_t *cfg, const config_field_t *f, const char *value)
-{
-    if (!cfg || !f || !value) return ESP_ERR_INVALID_ARG;
-
-    if (f->type == FIELD_TYPE_STRING) {
-        size_t vlen = strlen(value);
-        if (vlen >= f->max_len) {
-            return ESP_ERR_INVALID_ARG;
-        }
-        char *dest = (char *)((uint8_t *)cfg + f->offset);
-        strncpy(dest, value, f->max_len - 1);
-        dest[f->max_len - 1] = '\0';
-        return ESP_OK;
-    }
-
-    if (f->type == FIELD_TYPE_U8) {
-        long val = strtol(value, NULL, 10);
-        if (val < f->min_val || val > f->max_val) {
-            return ESP_ERR_INVALID_ARG;
-        }
-        uint8_t *dest = (uint8_t *)((uint8_t *)cfg + f->offset);
-        *dest = (uint8_t)val;
-        return ESP_OK;
-    }
-
-    if (f->type == FIELD_TYPE_U16) {
-        long val = strtol(value, NULL, 10);
-        if (val < f->min_val || val > f->max_val) {
-            return ESP_ERR_INVALID_ARG;
-        }
-        uint16_t *dest = (uint16_t *)((uint8_t *)cfg + f->offset);
-        *dest = (uint16_t)val;
-        return ESP_OK;
-    }
-
-    return ESP_ERR_INVALID_ARG;
-}
-
-/**
- * Handler for: AT+CFGGET=<field>  (get config field value)
- */
-static void handle_cfgget(const char *params)
-{
-    if (!params || params[0] == '\0' || strcmp(params, "?") == 0) {
-        at_error_msg("missing field name");
-        return;
-    }
-
-    const config_field_t *f = find_config_field(params);
-    if (!f) {
-        at_error_msg("unknown field");
-        return;
-    }
-    /* 契约红线（docs/at-command.md §3）：任何读指令不得回显密码/密钥。
-     * 2026-09-04 前本命令可明文读 wifi_pass（曾用于一次性板间凭据迁移），
-     * 统一后从读路径剔除；写入仍走 AT+CFGSET。 */
-    if (strstr(f->name, "pass") || strstr(f->name, "password") ||
-        strstr(f->name, "secret")) {
-        at_error_msg("secret fields are write-only (AT+CFGSET)");
-        return;
-    }
-
-    const cam_config_t *cfg = config_get();
-
-    if (f->type == FIELD_TYPE_STRING) {
-        const char *s = (const char *)config_field_ptr(cfg, f);
-        at_send("+CFGGET:%s=%s", f->name, s);
-    } else if (f->type == FIELD_TYPE_U8) {
-        uint8_t v = *(const uint8_t *)config_field_ptr(cfg, f);
-        at_send("+CFGGET:%s=%u", f->name, (unsigned)v);
-    } else if (f->type == FIELD_TYPE_U16) {
-        uint16_t v = *(const uint16_t *)config_field_ptr(cfg, f);
-        at_send("+CFGGET:%s=%u", f->name, (unsigned)v);
-    }
-    at_ok();
-}
-
-/**
- * Parse a "field,value" pair from a string.
- * Splits on first comma. Trims whitespace from field name.
- */
-static esp_err_t parse_field_value(const char *input, char *field, size_t field_sz,
-                                    char *value, size_t value_sz)
-{
-    if (!input || !field || !value) return ESP_ERR_INVALID_ARG;
-
-    /* Copy to mutable buffer */
-    char buf[AT_LINE_MAX];
-    strncpy(buf, input, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-
-    /* Split on first comma */
-    char *comma = strchr(buf, ',');
-    if (!comma) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    *comma = '\0';
-    char *f = buf;
-    char *v = comma + 1;
-
-    /* Trim leading/trailing whitespace from field name */
-    while (*f == ' ' || *f == '\t') f++;
-    char *end = f + strlen(f) - 1;
-    while (end > f && (*end == ' ' || *end == '\t')) *end-- = '\0';
-
-    /* Strip quotes from value */
-    v = strip_quotes(v);
-
-    strncpy(field, f, field_sz - 1);
-    field[field_sz - 1] = '\0';
-    strncpy(value, v, value_sz - 1);
-    value[value_sz - 1] = '\0';
-
-    if (strlen(field) == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    return ESP_OK;
-}
-
-/**
- * Handler for: AT+CFGSET=<field>,<value>  (set config field)
- *
- * In-memory only until AT+SAVE is issued.
- */
-static void handle_cfgset(const char *params)
-{
-    if (!params || params[0] == '\0') {
-        at_error_msg("missing field and value");
-        return;
-    }
-
-    char field[AT_FIELD_MAX];
-    char value[AT_VALUE_MAX];
-
-    if (parse_field_value(params, field, sizeof(field), value, sizeof(value)) != ESP_OK) {
-        at_error_msg("invalid format: expected field,value");
-        return;
-    }
-
-    const config_field_t *f = find_config_field(field);
-    if (!f) {
-        at_error_msg("unknown field");
-        return;
-    }
-
-    cam_config_t cfg;
-    config_get_copy(&cfg);
-    esp_err_t ret = config_field_set_from_str(&cfg, f, value);
-    if (ret != ESP_OK) {
-        at_error_msg("invalid value for field");
-        return;
-    }
-
-    ret = config_set(&cfg);
-    if (ret == ESP_OK) {
-        at_ok();
-    } else {
-        at_error();
-    }
-}
-
-/**
- * Handler for: AT+SAVE  (save config to NVS)
- */
-static void handle_save(const char *params)
-{
-    (void)params;
-    esp_err_t ret = config_save(config_get());
-    if (ret == ESP_OK) {
-        at_ok();
-    } else {
-        at_error();
-    }
-}
-
-/**
- * Handler for: AT+STREAM?  (query stream + motion status)
- */
-static void handle_stream_query(const char *params)
-{
-    (void)params;
-    int clients = mjpeg_streamer_get_client_count();
-    bool motion_running = motion_detect_is_running();
-
-    printf("\r\n");
-    printf("Stream clients: %d\r\n", clients);
-    printf("Motion detect: %s\r\n", motion_running ? "running" : "stopped");
-    at_ok();
-}
-
-/* ---------------------------------------------------------------------------
- * Family-core handlers (docs/at-command.md v1.0, 2026-09-04)
- * -------------------------------------------------------------------------*/
-
-/** AT+STATUS — consolidated status（家族核心，2026-09-04 新增） */
-static void handle_status(const char *params)
-{
-    (void)params;
-    const cam_config_t *cfg = config_get();
-    printf("Board:      LuatOS ESP32-S3-A10 (OV2640, no PSRAM)\r\n");
-    printf("Uptime:     %lld s\r\n", (long long)(esp_timer_get_time() / 1000000));
-    printf("Heap:       %lu / min %lu bytes\r\n",
-           (unsigned long)esp_get_free_heap_size(),
-           (unsigned long)esp_get_minimum_free_heap_size());
-    printf("WiFi:       %s\r\n", wifi_state_str(wifi_get_state()));
-    printf("SSID:       %s\r\n", cfg->wifi_ssid[0] ? cfg->wifi_ssid : "(none)");
-    printf("IP:         %s\r\n", wifi_get_ip_str());
-    printf("Camera:     res=%s quality=%u [%d-%d]\r\n",
-           cfg->cam_framesize == CAMERA_RES_VGA ? "VGA" : "?", cfg->cam_quality,
-           CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
-    at_ok();
-}
-
-/** AT+CAMRES? / AT+CAMRES=n — 三层上限（本板实际由 board 层钳在 VGA；
- *  value 为家族统一 framesize_t 刻度，本板仅 10=VGA） */
-static void handle_camres(const char *params)
-{
-    const cam_config_t *cfg = config_get();
-    int eff_max = (int)camera_get_effective_max_res();
-    if (params == NULL || params[0] == '?' || params[0] == '\0') {
-        printf("+CAMRES:%u  supported: %d-%d (cap source: %s)\r\n",
-               cfg->cam_framesize, (int)CAMERA_RES_VGA, eff_max, camera_res_cap_source());
-        at_ok();
-        return;
-    }
-    int n = atoi(params);
-    if (n < (int)CAMERA_RES_VGA || n > eff_max) {
-        char msg[80];
-        snprintf(msg, sizeof(msg), "resolution must be %d-%d (cap source: %s)",
-                 (int)CAMERA_RES_VGA, eff_max, camera_res_cap_source());
-        at_error_msg(msg);
-        return;
-    }
-    at_ok();
-}
-
-/** AT+CAMQUAL? / AT+CAMQUAL=n — 10-63，保存+重启应用（本板热重配竞态禁用） */
-static void handle_camqual(const char *params)
-{
-    cam_config_t newcfg = *config_get();
-    if (params == NULL || params[0] == '?' || params[0] == '\0') {
-        printf("+CAMQUAL:%u [%d-%d] (applies after reboot on this board)\r\n",
-               newcfg.cam_quality, CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
-        at_ok();
-        return;
-    }
-    int n = atoi(params);
-    if (n < CAMERA_QUALITY_MIN || n > CAMERA_QUALITY_MAX) {
         char msg[64];
-        snprintf(msg, sizeof(msg), "quality must be %d-%d",
-                 CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
-        at_error_msg(msg);
+        snprintf(msg, sizeof(msg), "unsupported (max %d %s, source: %s)",
+                 cap, at_framesize_label(cap), src);
+        at_error(msg);
         return;
     }
-    if (n == (int)newcfg.cam_quality) {
-        at_ok();
+    if (ret != ESP_OK) {
+        at_error("apply failed");
         return;
     }
-    newcfg.cam_quality = (uint8_t)n;
-    if (config_save(&newcfg) != ESP_OK) {
-        at_error_msg("save failed");
-        return;
-    }
-    /* 同 web POST /api/camera：本板热重配在并发取帧下致命（2026-09-03 实测），
-     * 保存+应答+1s 重启应用 */
-    printf("OK — quality=%d saved, rebooting to apply\r\n", n);
-    fflush(stdout);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    esp_restart();
+    at_ok();   /* 生效语义随板（§6）；port 已打印 +APPLY/+REBOOTING 行 */
 }
 
-/* ---------------------------------------------------------------------------
- * Command registry
- * -------------------------------------------------------------------------*/
-
-static void handle_help(const char *params);   /* needs s_cmds → defined below table */
-
-typedef struct {
-    const char *cmd;   /**< Command suffix (e.g., "+RST", "+CWJAP") */
-    void (*handler)(const char *params);
-} at_cmd_entry_t;
-
-static const at_cmd_entry_t s_cmds[] = {
-    /* Basic commands */
-    { "",                 handle_at          },   /* AT (no suffix) */
-
-    /* System commands — 家族核心名在前（docs/at-command.md v1.0） */
-    { "+HELP",            handle_help        },
-    { "+STATUS",          handle_status      },
-    { "+REBOOT",          handle_rst         },
-    { "+CAMRES?",         handle_camres      },
-    { "+CAMRES=",         handle_camres      },
-    { "+CAMQUAL?",        handle_camqual     },
-    { "+CAMQUAL=",        handle_camqual     },
-    { "+RST",             handle_rst         },
-    { "+GMR",             handle_gmr         },
-    { "+RESTORE",         handle_restore     },
-    { "+HEAP",            handle_heap        },
-    { "+UPTIME",          handle_uptime      },
-    { "+TEMP",            handle_temp        },
-
-    /* WiFi commands */
-    { "+CWJAP?",          handle_cwjap_query },
-    { "+CWJAP=",          handle_cwjap_set   },
-    { "+CWJAP2?",         handle_cwjap2_query },
-    { "+CWJAP2=",         handle_cwjap2_set   },
-    { "+CWQAP",           handle_cwqap       },
-    { "+WIFI?",           handle_cwjap_query },   /* 家族核心名（CWJAP 为历史别名） */
-    { "+WIFI=",           handle_cwjap_set   },
-    { "+WIFISCAN",        handle_cwlap       },
-    { "+CIFSR",           handle_cifsr       },
-    { "+CWLAP",           handle_cwlap       },
-
-    /* Device name commands */
-    { "+NAME?",           handle_name_query  },
-    { "+NAME=",           handle_name_set    },
-
-    /* Config commands */
-    { "+CFGGET=",         handle_cfgget      },
-    { "+CFGSET=",         handle_cfgset      },
-    { "+SAVE",            handle_save        },
-
-    /* Stream commands */
-    { "+STREAM?",         handle_stream_query },
-};
-static const int s_cmds_count = sizeof(s_cmds) / sizeof(s_cmds[0]);
-
-/** AT+HELP — list supported commands（家族核心，2026-09-04 新增） */
-static void handle_help(const char *params)
+static void cmd_camqual_query(void)
 {
-    (void)params;
-    printf("\r\nMiBeeCam AT commands (family contract v1.0):\r\n");
-    for (int i = 0; i < s_cmds_count; i++) {
-        printf("  AT%s\r\n", s_cmds[i].cmd);
+    int qmin = 0, qmax = 0;
+    int q = at_port_cam_qual_get(&qmin, &qmax);
+    at_data("CAMQUAL", "%d [%d-%d]", q, qmin, qmax);
+}
+
+static void cmd_camqual_set(const char *args)
+{
+    char *end = NULL;
+    long v = strtol(args, &end, 10);
+    if (end == args || *end != '\0') {
+        at_error("usage: AT+CAMQUAL=n");
+        return;
+    }
+    esp_err_t ret = at_port_cam_qual_set((int)v);
+    if (ret == ESP_ERR_INVALID_ARG) {
+        int qmin = 0, qmax = 0;
+        at_port_cam_qual_get(&qmin, &qmax);
+        char msg[48];
+        snprintf(msg, sizeof(msg), "out of range [%d-%d]", qmin, qmax);
+        at_error(msg);
+        return;
+    }
+    if (ret != ESP_OK) {
+        at_error("apply failed");
+        return;
     }
     at_ok();
 }
 
-/* ---------------------------------------------------------------------------
- * Command dispatch
- * -------------------------------------------------------------------------*/
-
-/**
- * @brief Match a command string against the command table and dispatch.
- *
- * @param cmd_suffix  The part after "AT" (e.g., "+RST", "+CWJAP=", "+CWJAP?")
- * @param params      The parameter string (after "="), or "?" for queries, or "" for no params
- */
-static void dispatch_command(const char *cmd_suffix, const char *params)
+static void cmd_cfgget(const char *args)
 {
-    for (int i = 0; i < s_cmds_count; i++) {
-        if (strcmp(cmd_suffix, s_cmds[i].cmd) == 0) {
-            s_cmds[i].handler(params);
+    int count = 0;
+    const at_cfg_field_t *fields = at_port_cfg_fields(&count);
+    for (int i = 0; i < count; i++) {
+        if (strcasecmp(fields[i].name, args) == 0) {
+            if (fields[i].secret) {
+                at_error("write-only field");
+                return;
+            }
+            char val[96];
+            val[0] = '\0';
+            if (fields[i].get) {
+                fields[i].get(val, sizeof(val));
+            }
+            at_data("CFGGET", "%s=%s", fields[i].name, val);
+            at_ok();
+            return;
+        }
+    }
+    at_error("unknown field");
+}
+
+static void cmd_cfgset(const char *args)
+{
+    const char *comma = strchr(args, ',');
+    if (!comma) {
+        at_error("usage: AT+CFGSET=field,value");
+        return;
+    }
+    char name[48];
+    size_t nlen = (size_t)(comma - args);
+    if (nlen == 0 || nlen >= sizeof(name)) {
+        at_error("invalid field name");
+        return;
+    }
+    memcpy(name, args, nlen);
+    name[nlen] = '\0';
+
+    int count = 0;
+    const at_cfg_field_t *fields = at_port_cfg_fields(&count);
+    for (int i = 0; i < count; i++) {
+        if (strcasecmp(fields[i].name, name) == 0) {
+            esp_err_t ret = fields[i].set ? fields[i].set(comma + 1) : ESP_ERR_NOT_SUPPORTED;
+            if (ret == ESP_ERR_INVALID_ARG) {
+                at_error("invalid value");
+            } else if (ret != ESP_OK) {
+                at_error("set failed");
+            } else {
+                at_ok();
+            }
+            return;
+        }
+    }
+    at_error("unknown field");
+}
+
+static void cmd_help(void);
+
+/* ── 核心指令表 ────────────────────────────────────────────────── */
+
+typedef enum { CAP_NONE = 0, CAP_WIFI_SCAN = 1, CAP_CFG = 2 } at_cap_bit_t;
+
+typedef struct {
+    const char *name;              /* 不含 AT+ 前缀，不含 ?/= */
+    at_cap_bit_t cap;              /* 能力门控 */
+    bool has_query;                /* 支持 NAME? 形式 */
+    bool has_set;                  /* 支持 NAME= 形式 */
+    const char *help;
+    void (*query)(void);
+    void (*set)(const char *args);
+} at_cmd_t;
+
+static const at_cmd_t s_core_cmds[] = {
+    { "HELP",     CAP_NONE, false, false, "list commands",            cmd_help,     NULL         },
+    { "GMR",      CAP_NONE, false, false, "fw / chip / board / sensor", cmd_gmr,   NULL         },
+    { "WIFI",     CAP_NONE, true,  true,  "WIFI? | WIFI=ssid,pass",   cmd_wifi_query, cmd_wifi_set },
+    { "WIFISCAN", CAP_WIFI_SCAN, false, false, "scan APs",            cmd_wifi_scan, NULL        },
+    { "IP",       CAP_NONE, true,  false, "IP/mask/gateway",          cmd_ip_query, NULL         },
+    { "STATUS",   CAP_NONE, false, false, "uptime/heap/wifi/camera",  cmd_status,   NULL         },
+    { "CAMRES",   CAP_NONE, true,  true,  "CAMRES? | CAMRES=n",       cmd_camres_query, cmd_camres_set },
+    { "CAMQUAL",  CAP_NONE, true,  true,  "CAMQUAL? | CAMQUAL=n",     cmd_camqual_query, cmd_camqual_set },
+    { "REBOOT",   CAP_NONE, false, false, "restart device",           NULL, NULL                  },
+    { "RESTORE",  CAP_NONE, false, false, "factory reset + reboot",   NULL, NULL                  },
+    { "CFGGET",   CAP_CFG,  false, true,  "CFGGET=field",             NULL, NULL                  },
+    { "CFGSET",   CAP_CFG,  false, true,  "CFGSET=field,value",       NULL, NULL                  },
+    { "SAVE",     CAP_CFG,  false, false, "persist config",           NULL, NULL                  },
+};
+
+static void cmd_help(void)
+{
+    const at_caps_t *caps = at_port_caps();
+    at_out("+HELP: core:\r\n");
+    for (size_t i = 0; i < sizeof(s_core_cmds) / sizeof(s_core_cmds[0]); i++) {
+        const at_cmd_t *c = &s_core_cmds[i];
+        bool allowed = (c->cap == CAP_NONE) ||
+                       (c->cap == CAP_WIFI_SCAN && caps->wifi_scan) ||
+                       (c->cap == CAP_CFG && caps->cfg);
+        if (!allowed) continue;
+        at_data("HELP", "%-22s %s", c->name, c->help);
+    }
+    int ext_count = 0;
+    const at_ext_cmd_t *exts = at_port_ext_cmds(&ext_count);
+    if (ext_count > 0) {
+        at_out("+HELP: board:\r\n");
+        for (int i = 0; i < ext_count; i++) {
+            at_data("HELP", "%-22s %s", exts[i].name, exts[i].help);
+        }
+    }
+    at_ok();
+}
+
+/* ── 分发 ──────────────────────────────────────────────────────── */
+
+static bool cap_allows(at_cap_bit_t cap)
+{
+    const at_caps_t *caps = at_port_caps();
+    if (cap == CAP_NONE) return true;
+    if (cap == CAP_WIFI_SCAN) return caps->wifi_scan;
+    if (cap == CAP_CFG) return caps->cfg;
+    return false;
+}
+
+static void dispatch(const char *line)
+{
+    /* 大小写不敏感的 AT 前缀（契约 §1） */
+    if (strncasecmp(line, "AT", 2) != 0) {
+        return;   /* 非 AT 行静默忽略 */
+    }
+    if (line[2] == '\0') {
+        at_ok();
+        return;
+    }
+    if (line[2] != '+') {
+        return;   /* AT<其他> 视为噪声，忽略 */
+    }
+
+    const char *cmd = line + 3;
+    if (!cmd[0]) {
+        at_error("empty command");
+        return;
+    }
+
+    /* 在首个 '=' 或 '?' 处切分：name / args */
+    char name[32];
+    char args[AT_LINE_MAX];
+    bool is_query = false;
+    const char *eq = strpbrk(cmd, "=?");
+    if (eq) {
+        is_query = (*eq == '?');
+        size_t nlen = (size_t)(eq - cmd);
+        if (nlen >= sizeof(name)) {
+            at_error("command too long");
+            return;
+        }
+        memcpy(name, cmd, nlen);
+        name[nlen] = '\0';
+        strlcpy(args, is_query ? "" : eq + 1, sizeof(args));
+    } else {
+        strlcpy(name, cmd, sizeof(name));
+        args[0] = '\0';
+    }
+
+    /* 历史别名（契约 §4；板级映射在 port） */
+    const char *canonical = at_port_alias(name);
+    if (canonical) {
+        strlcpy(name, canonical, sizeof(name));
+    }
+
+    for (size_t i = 0; i < sizeof(s_core_cmds) / sizeof(s_core_cmds[0]); i++) {
+        const at_cmd_t *c = &s_core_cmds[i];
+        if (strcasecmp(c->name, name) != 0) continue;
+
+        if (!cap_allows(c->cap)) {
+            at_error("not supported on this board");
+            return;
+        }
+        if (is_query && !c->has_query) {
+            at_error("query not supported");
+            return;
+        }
+        if (!is_query && args[0] != '\0' && !c->has_set) {
+            at_error("assignment not supported");
+            return;
+        }
+        if (!is_query && args[0] == '\0' && c->has_set) {
+            at_error("missing argument");
+            return;
+        }
+
+        /* 无参动作型指令 */
+        if (strcmp(c->name, "REBOOT") == 0) { at_ok(); at_port_reboot(); return; }
+        if (strcmp(c->name, "RESTORE") == 0) { at_ok(); at_port_restore(); return; }
+        if (strcmp(c->name, "SAVE") == 0) { at_port_save(); at_ok(); return; }
+        if (strcmp(c->name, "CFGGET") == 0) { cmd_cfgget(args); return; }
+        if (strcmp(c->name, "CFGSET") == 0) { cmd_cfgset(args); return; }
+
+        if (is_query) c->query ? c->query() : (void)0;
+        else if (args[0] != '\0') c->set ? c->set(args) : (void)0;
+        else c->query ? c->query() : (void)0;   /* 裸名视同查询 */
+        return;
+    }
+
+    /* 板级扩展（§5）：前缀匹配整串 */
+    int ext_count = 0;
+    const at_ext_cmd_t *exts = at_port_ext_cmds(&ext_count);
+    for (int i = 0; i < ext_count; i++) {
+        size_t nlen = strlen(exts[i].name);
+        if (strncasecmp(cmd, exts[i].name, nlen) == 0 &&
+            (cmd[nlen] == '\0' || cmd[nlen] == '=' || cmd[nlen] == '?')) {
+            esp_err_t ret = exts[i].handler ? exts[i].handler(cmd) : ESP_ERR_NOT_SUPPORTED;
+            if (ret != ESP_OK) {
+                at_error("extension failed");
+            }
             return;
         }
     }
 
-    /* No match: if it looks like an extended command (+XXX), report error */
-    at_error();
+    at_error("unknown command (AT+HELP for list)");
 }
 
-/* ---------------------------------------------------------------------------
- * AT command parser task
- * -------------------------------------------------------------------------*/
+/* ── 任务 ──────────────────────────────────────────────────────── */
 
-/**
- * @brief Dedicated task that reads lines from stdin and dispatches AT commands.
- *
- * Lines that do not start with "AT" (case-insensitive for the "AT" prefix)
- * are silently ignored (they could be log output mixed into the stream).
- */
-static void at_command_task(void *arg)
+static void at_task(void *arg)
 {
-    (void)arg;
     char line[AT_LINE_MAX];
 
-    ESP_LOGI(TAG, "AT command task started");
+    /* 上电静默期：启动日志密集期不抢口 */
+    vTaskDelay(pdMS_TO_TICKS(AT_SETTLE_MS));
 
-    while (s_running) {
-        /* Read one line via stdin (connected to UART0 via VFS) */
-        if (fgets(line, sizeof(line), stdin) == NULL) {
-            vTaskDelay(pdMS_TO_TICKS(10));
+    at_out("\r\n+READY: MiBee Cam AT console (AT+HELP)\r\n");
+
+    while (1) {
+        int n = at_port_getline(line, sizeof(line));
+        if (n < 0) {
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
-
-        /* Strip trailing \r and \n */
-        size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\r' || line[len - 1] == '\n')) {
-            line[--len] = '\0';
-        }
-
-        /* Skip empty lines */
-        if (len == 0) {
+        if (n == 0) {
             continue;
         }
-
-        /* Check for "AT" prefix (case-insensitive for "AT" only) */
-        if (len >= 2 &&
-            (line[0] == 'A' || line[0] == 'a') &&
-            (line[1] == 'T' || line[1] == 't')) {
-
-            const char *suffix = line + 2;   /* Everything after "AT" */
-
-            /* If exactly "AT" with no suffix */
-            if (suffix[0] == '\0') {
-                dispatch_command("", "");
-                continue;
-            }
-
-            /* For commands with "=" or "?": split suffix from params */
-            /* Scan for the first = or ? */
-            const char *eq_or_qmark = NULL;
-            int idx = 0;
-            while (suffix[idx] != '\0') {
-                if (suffix[idx] == '=' || suffix[idx] == '?') {
-                    eq_or_qmark = suffix + idx;
-                    break;
-                }
-                idx++;
-            }
-
-            if (eq_or_qmark) {
-                /* Build command suffix including the = or ? */
-                char cmd_buf[AT_CMD_BUF_MAX];
-                int cmd_len = (int)(eq_or_qmark - suffix) + 1; /* include = or ? */
-                if (cmd_len >= (int)sizeof(cmd_buf)) {
-                    at_error();
-                    continue;
-                }
-                strncpy(cmd_buf, suffix, cmd_len);
-                cmd_buf[cmd_len] = '\0';
-
-                const char *params = eq_or_qmark + 1;
-
-                /* For query commands (?), params is "?" part (already handled via cmd_buf) */
-                if (*eq_or_qmark == '?') {
-                    /* For query commands, pass "?" as params so handlers can distinguish */
-                    dispatch_command(cmd_buf, "?");
-                } else {
-                    /* For set commands (=), pass everything after = */
-                    dispatch_command(cmd_buf, params);
-                }
-            } else {
-                /* No = or ? — this is a command with no params */
-                char cmd_buf[AT_CMD_BUF_MAX];
-                strncpy(cmd_buf, suffix, sizeof(cmd_buf) - 1);
-                cmd_buf[sizeof(cmd_buf) - 1] = '\0';
-                dispatch_command(cmd_buf, "");
-            }
-        }
-        /* Lines not starting with "AT" are silently ignored (log output, etc.) */
-    }
-
-    ESP_LOGI(TAG, "AT command task stopped");
-    vTaskDelete(NULL);
-}
-
-/* ---------------------------------------------------------------------------
- * UART / VFS initialization
- * -------------------------------------------------------------------------*/
-
-/**
- * @brief Initialize UART0 for AT command I/O.
- *
- * Attempts to install the UART0 driver and connect it to the VFS layer
- * (stdin/stdout). If the driver is already installed by the console
- * subsystem, we just use the existing stdin/stdout connection.
- */
-static void uart_vfs_init(void)
-{
-    /* Configure UART0 */
-    uart_config_t uart_config = {
-        .baud_rate = 115200,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
-
-    esp_err_t ret = uart_driver_install(UART_NUM_0, 512, 512, 20, NULL, 0);
-    if (ret == ESP_OK) {
-        /* Fresh install — configure and connect to VFS */
-        uart_param_config(UART_NUM_0, &uart_config);
-        uart_set_pin(UART_NUM_0, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
-                     UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-        uart_vfs_dev_use_driver(UART_NUM_0);
-        ESP_LOGI(TAG, "UART0 driver installed for AT commands");
-    } else {
-        /* Driver already installed by console subsystem — use existing */
-        ESP_LOGW(TAG, "UART0 already in use (%s), using existing console", esp_err_to_name(ret));
+        dispatch(line);
     }
 }
-
-/* ---------------------------------------------------------------------------
- * Public API
- * -------------------------------------------------------------------------*/
 
 esp_err_t at_command_init(void)
 {
-    if (s_running) {
-        ESP_LOGW(TAG, "AT command interface already initialized");
-        return ESP_OK;
+    esp_err_t ret = at_port_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "port init failed: %s", esp_err_to_name(ret));
+        return ret;
     }
-
-    /* Initialize UART/VFS for stdin/stdout access */
-    uart_vfs_init();
-
-    /* Start the AT command parsing task */
-    s_running = true;
-    BaseType_t ret = xTaskCreate(at_command_task, "at_cmd", 4096, NULL, 5, NULL);
-    if (ret != pdPASS) {
-        s_running = false;
-        ESP_LOGE(TAG, "Failed to create AT command task");
-        return ESP_ERR_NO_MEM;
+    if (xTaskCreate(at_task, "at_cmd", AT_TASK_STACK, NULL, AT_TASK_PRIO, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "task create failed");
+        return ESP_FAIL;
     }
-
-    ESP_LOGI(TAG, "AT command interface initialized");
-    return ESP_OK;
-}
-
-esp_err_t at_command_deinit(void)
-{
-    s_running = false;
-    ESP_LOGI(TAG, "AT command interface deinitialized");
+    ESP_LOGI(TAG, "AT console core ready (contract v1.1)");
     return ESP_OK;
 }
