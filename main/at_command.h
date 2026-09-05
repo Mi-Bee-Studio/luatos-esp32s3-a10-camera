@@ -1,23 +1,12 @@
-/**
- * @file at_command.h
- * @brief AT command interface for MiBeeCam ESP32-S3-A10.
+/*
+ * at_command.h — MiBee Cam 家族 AT 控制台核心（契约 v1.1）
  *
- * Provides a serial AT command interface over UART0 for device
- * configuration, query, and control. Supports 18 standard AT commands
- * including WiFi management, config get/set, device info, and streaming status.
- *
- * Architecture:
- *   - A dedicated FreeRTOS task reads lines from stdin (UART0 via VFS)
- *   - Lines starting with "AT" are parsed and dispatched to command handlers
- *   - Responses are printed via printf to stdout
- *   - Log output (ESP_LOG*) is also on UART0; the AT task ignores non-AT lines
- *
- * @note This module does NOT authenticate or authorize — it operates on
- *       the physical serial port and assumes trusted access.
+ * 核心文件（at_command.c / at_command.h / at_port.h）四仓 md5 一致；
+ * 板差异见各仓 main/at_port.c（接口契约：at_port.h）。
  */
-#pragma once
+#ifndef AT_COMMAND_H
+#define AT_COMMAND_H
 
-#include <stdint.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -25,34 +14,14 @@ extern "C" {
 #endif
 
 /**
- * @brief Initialize the AT command interface.
+ * @brief 启动家族 AT 控制台（初始化 port IO 后台 + 分发任务）
  *
- * Installs the UART0 driver for VFS-backed stdin/stdout (if not already
- * installed by the console subsystem), registers the VFS UART handler,
- * and creates the AT command parsing task.
- *
- * The AT command task:
- *   - Stack: 4096 bytes
- *   - Priority: 5
- *   - Reads one line at a time via fgets(stdin, ...)
- *   - Dispatches matching commands to their handlers
- *   - Ignores non-AT lines (log output, garbage)
- *
- * @return ESP_OK on success
- * @return ESP_ERR_NO_MEM if task creation fails
+ * 各板在 main.c 启动序列中调用一次；重复调用返回 ESP_ERR_INVALID_STATE。
  */
 esp_err_t at_command_init(void);
-
-/**
- * @brief Deinitialize the AT command interface.
- *
- * Signals the AT command task to stop and clean up.
- * Currently a no-op stub — the AT task runs until the device reboots.
- *
- * @return ESP_OK always
- */
-esp_err_t at_command_deinit(void);
 
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* AT_COMMAND_H */
