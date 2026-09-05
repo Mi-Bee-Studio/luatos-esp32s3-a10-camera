@@ -101,3 +101,5 @@ tmp/
 # --------------------------------------------
 managed_components/
 dependencies.lock
+tools/overnight_serial.log
+tools/overnight_reboots.log
