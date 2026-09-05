@@ -593,7 +593,7 @@ static esp_err_t handler_capabilities(httpd_req_t *req)
     }
 
     /* 契约 v1.0：12 个布尔能力位 + api_version/wifi_scan（见 docs/api-contract.md） */
-    cJSON_AddStringToObject(data, "api_version", "1.1");
+    cJSON_AddStringToObject(data, "api_version", "1.3");
 #ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
     cJSON_AddBoolToObject(data, "wifi_scan", true);
 #else
