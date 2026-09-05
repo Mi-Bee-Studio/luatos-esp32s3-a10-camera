@@ -70,7 +70,7 @@ idf.py -p COMx flash monitor
 
 WiFi credentials are configured at runtime (no code changes needed):
 
-1. **First boot**: Device enters AP mode (SSID: MiBeeCam, password: 12345678)
+1. **First boot**: Device enters AP mode (SSID: MiBeeCam, password: mibeecam2026)
 2. **Web UI**: Open http://192.168.4.1, enter WiFi credentials on config page
 3. **AT Commands**: Use `AT+CWJAP=<ssid>,<pwd>` via UART0 serial (115200 baud)
 4. **Backup WiFi**: Use `AT+CWJAP2=<ssid>,<pwd>` for fallback SSID
