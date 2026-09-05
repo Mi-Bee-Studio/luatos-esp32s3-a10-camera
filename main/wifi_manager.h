@@ -28,7 +28,7 @@ typedef void (*wifi_state_callback_t)(wifi_state_t state, void *user_data);
 esp_err_t wifi_init(void);
 
 /**
- * @brief 启动 AP 模式 (SSID: MiBeeCam, password: 12345678)
+ * @brief 启动 AP 模式 (SSID: MiBeeCam, password: mibeecam2026)
  * @return ESP_OK 成功，其他值失败
  */
 esp_err_t wifi_start_ap(void);

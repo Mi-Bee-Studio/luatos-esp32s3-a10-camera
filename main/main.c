@@ -321,7 +321,7 @@ void app_main(void)
         led_set_status(LED_AP_MODE);
 
         ESP_LOGI(TAG, "========================================");
-        ESP_LOGI(TAG, "  AP Mode: SSID=MiBeeCam  Pass=12345678");
+        ESP_LOGI(TAG, "  AP Mode: SSID=MiBeeCam  Pass=mibeecam2026");
         ESP_LOGI(TAG, "  Config page: http://192.168.4.1");
         ESP_LOGI(TAG, "========================================");
 

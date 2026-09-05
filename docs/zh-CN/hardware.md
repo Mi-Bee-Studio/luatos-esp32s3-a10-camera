@@ -105,7 +105,7 @@ python -m esptool --chip esp32s3 -p COMx write_flash 0x392000 build/spiffs.bin
 | 配置项 | 值 |
 |--------|-----|
 | SSID | "MiBeeCam" |
-| 密码 | "12345678" |
+| 密码 | "mibeecam2026" |
 | IP 地址 | 192.168.4.1 |
 
 ## 🔌 状态指示 LED

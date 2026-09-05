@@ -117,7 +117,7 @@ python -m esptool --chip esp32s3 -p COMx write_flash 0x392000 build/spiffs.bin
 
 On first boot the device enters AP mode because no WiFi credentials are stored:
 
-1. Connect to WiFi network **MiBeeCam** (password: `12345678`)
+1. Connect to WiFi network **MiBeeCam** (password: `mibeecam2026`)
 2. Open **http://192.168.4.1** in a browser
 3. Go to the configuration page and enter your WiFi SSID and password
 4. Save — the device reboots and connects in STA mode

@@ -118,7 +118,7 @@ typedef struct {
 
 **AP 模式配置**:
 - SSID: "MiBeeCam"
-- 密码: "12345678"
+- 密码: "mibeecam2026"
 - IP: 192.168.4.1
 - 2.4GHz 频段 only
 

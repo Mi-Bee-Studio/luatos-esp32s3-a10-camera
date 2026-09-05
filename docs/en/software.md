@@ -165,7 +165,7 @@ The MiBeeCam software is designed as a real-time embedded system with multiple c
 - **Preferred Mode**: STA mode
 - **Fallback Mode**: AP mode
 - **AP Default SSID**: "MiBeeCam"
-- **AP Default Password**: "12345678"
+- **AP Default Password**: "mibeecam2026"
 - **AP Default IP**: 192.168.4.1
 - **Frequency**: 2.4GHz only
 

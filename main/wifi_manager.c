@@ -300,7 +300,7 @@ esp_err_t wifi_start_ap(void)
         .ap = {
             .ssid = "MiBeeCam",
             .ssid_len = 8,
-            .password = "12345678",
+            .password = "mibeecam2026",
             .max_connection = 4,
             .authmode = WIFI_AUTH_WPA_WPA2_PSK,
         },

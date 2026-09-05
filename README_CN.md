@@ -111,7 +111,7 @@ python -m esptool --chip esp32s3 -p COMx write_flash 0x392000 build/spiffs.bin
 
 首次启动时，设备因为没有存储 WiFi 凭证而进入 AP 模式：
 
-1. 连接 WiFi 网络 **MiBeeCam**（密码：`12345678`）
+1. 连接 WiFi 网络 **MiBeeCam**（密码：`mibeecam2026`）
 2. 在浏览器中打开 **http://192.168.4.1**
 3. 进入配置页面，输入您的 WiFi 名称和密码
 4. 保存 — 设备重启并在 STA 模式下连接
