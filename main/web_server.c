@@ -262,13 +262,16 @@ static esp_err_t require_auth(httpd_req_t *req)
 /*  Resolution helper                                                  */
 /* ------------------------------------------------------------------ */
 
+/* 家族统一刻度（契约 v1.3 §5）：value = framesize_t（10-15） */
 static const char *res_to_str(uint8_t res)
 {
     switch (res) {
-        case 0: return "VGA";
-        case 1: return "SVGA";
-        case 2: return "XGA";
-        case 3: return "UXGA";
+        case 10: return "VGA";
+        case 11: return "SVGA";
+        case 12: return "XGA";
+        case 13: return "HD";
+        case 14: return "SXGA";
+        case 15: return "UXGA";
         default: return "Unknown";
     }
 }
@@ -317,7 +320,7 @@ static esp_err_t handler_api_status(httpd_req_t *req)
 #endif
 
     cJSON_AddStringToObject(data, "camera", camera_get_sensor_name());
-    cJSON_AddStringToObject(data, "resolution", res_to_str(cfg->resolution));
+    cJSON_AddStringToObject(data, "resolution", res_to_str(cfg->cam_framesize));
 
     cJSON_AddNumberToObject(data, "uptime", (double)(esp_timer_get_time() / 1000000));
     cJSON_AddStringToObject(data, "firmware_version", "0.3.0");
@@ -350,26 +353,36 @@ static esp_err_t handler_api_config_get(httpd_req_t *req)
 {
     const cam_config_t *cfg = config_get();
 
+    /* 契约字段名（config-contract §3）；敏感字段掩码 "****"（§3 敏感清单） */
     cJSON *data = cJSON_CreateObject();
+    cJSON_AddStringToObject(data, "device_name", cfg->device_name);
     cJSON_AddStringToObject(data, "wifi_ssid", cfg->wifi_ssid);
     cJSON_AddStringToObject(data, "wifi_pass", cfg->wifi_pass[0] ? "****" : "");
-    cJSON_AddStringToObject(data, "server_url", cfg->server_url);
-    cJSON_AddStringToObject(data, "device_name", cfg->device_name);
-    cJSON_AddNumberToObject(data, "cam_framesize", cfg->resolution);
-    cJSON_AddNumberToObject(data, "fps", cfg->fps);
-    cJSON_AddNumberToObject(data, "cam_quality", cfg->jpeg_quality);
-    /* 契约扩展（2026-09-04）：画质滑杆边界由板端声明，前端据此钳制输入 */
+    cJSON_AddStringToObject(data, "wifi_ssid_2", cfg->wifi_ssid_2);
+    cJSON_AddStringToObject(data, "wifi_pass_2", cfg->wifi_pass_2[0] ? "****" : "");
     cJSON_AddStringToObject(data, "timezone", cfg->timezone);
-    cJSON_AddNumberToObject(data, "motion_threshold", cfg->motion_threshold);
-    cJSON_AddNumberToObject(data, "motion_cooldown", cfg->motion_cooldown);
-    // v3 fields (契约 v1.0 键名: wifi_ssid_2 / wifi_pass_2 / onvif_enable)
-    cJSON_AddStringToObject(data, "wifi_ssid_2", cfg->wifi_ssid2);
-    cJSON_AddStringToObject(data, "wifi_pass_2", cfg->wifi_pass2[0] ? "****" : "");
-    cJSON_AddStringToObject(data, "mdns_hostname", cfg->mdns_hostname);
-    cJSON_AddStringToObject(data, "webhook_url", cfg->webhook_url);
+    cJSON_AddStringToObject(data, "web_password", cfg->web_password[0] ? "****" : "");
+    cJSON_AddNumberToObject(data, "cam_framesize", (double)cfg->cam_framesize);
+    cJSON_AddNumberToObject(data, "cam_fps", (double)cfg->cam_fps);
+    cJSON_AddNumberToObject(data, "cam_quality", (double)cfg->cam_quality);
+    cJSON_AddNumberToObject(data, "cam_vflip", (double)cfg->cam_vflip);
+    cJSON_AddNumberToObject(data, "cam_hmirror", (double)cfg->cam_hmirror);
+    cJSON_AddNumberToObject(data, "xclk_freq_mhz", (double)cfg->xclk_freq_mhz);
+    cJSON_AddNumberToObject(data, "onvif_enable", (double)cfg->onvif_enable);
+    /* motion 家族超集（契约 §3.2）*/
+    cJSON_AddNumberToObject(data, "motion_enabled", (double)cfg->motion_enabled);
+    cJSON_AddNumberToObject(data, "motion_sensitivity", (double)cfg->motion_sensitivity);
+    cJSON_AddNumberToObject(data, "motion_cooldown_s", (double)cfg->motion_cooldown_s);
+    cJSON_AddNumberToObject(data, "motion_active_interval_s", (double)cfg->motion_active_interval_s);
+    /* webhook 组（契约 §3.2）*/
+    cJSON_AddNumberToObject(data, "alert_webhook_enabled", (double)cfg->alert_webhook_enabled);
+    cJSON_AddStringToObject(data, "alert_webhook_url", cfg->alert_webhook_url);
     cJSON_AddStringToObject(data, "webhook_secret", cfg->webhook_secret[0] ? "****" : "");
-    cJSON_AddBoolToObject(data, "onvif_enable", cfg->onvif_enabled);
-    cJSON_AddBoolToObject(data, "ws_enabled", cfg->ws_enabled);
+    cJSON_AddNumberToObject(data, "ws_enable", (double)cfg->ws_enable);
+    /* 板级扩展（契约 §7：server_url 可选）*/
+    cJSON_AddStringToObject(data, "server_url", cfg->server_url);
+    cJSON_AddStringToObject(data, "mdns_hostname", cfg->mdns_hostname);
+    cJSON_AddNumberToObject(data, "schema_version", (double)CONFIG_SCHEMA_VERSION);
 
     return json_ok(req, data);
 }
@@ -414,9 +427,12 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
 
     /* Snapshot old config for change detection */
     const cam_config_t *old_cfg = config_get();
-    uint8_t old_resolution = old_cfg->resolution;
-    uint8_t old_fps = old_cfg->fps;
-    uint8_t old_jpeg_quality = old_cfg->jpeg_quality;
+    uint8_t old_framesize = old_cfg->cam_framesize;
+    uint8_t old_fps = old_cfg->cam_fps;
+    uint8_t old_quality = old_cfg->cam_quality;
+    uint8_t old_vflip = old_cfg->cam_vflip;
+    uint8_t old_hmirror = old_cfg->cam_hmirror;
+    uint8_t old_xclk = old_cfg->xclk_freq_mhz;
     char old_wifi_ssid[33];
     char old_wifi_pass[65];
     strncpy(old_wifi_ssid, old_cfg->wifi_ssid, sizeof(old_wifi_ssid) - 1);
@@ -441,19 +457,28 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
         strncpy(new_cfg.device_name, item->valuestring, sizeof(new_cfg.device_name) - 1);
     if ((item = cJSON_GetObjectItem(root, "cam_framesize")) && cJSON_IsNumber(item)) {
         int val = (int)item->valuedouble;
-        /* 三层上限校验（同 /api/camera；本板实际由 board 层钳在 VGA） */
-        if (val < 0 || val > (int)camera_get_effective_max_res()) {
+        /* 三层上限校验（同 /api/camera；本板实际由 board 层钳在 VGA，
+         * 合法域 = supported_resolutions = {10}，其余一律 400） */
+        if (val < (int)FRAMESIZE_VGA || val > (int)camera_get_effective_max_res()) {
             cJSON_Delete(root);
             char msg[96];
             snprintf(msg, sizeof(msg),
-                     "cam_framesize out of range (0-%d, source: %s)",
-                     (int)camera_get_effective_max_res(), camera_res_cap_source());
+                     "cam_framesize out of range (%d-%d, source: %s)",
+                     (int)FRAMESIZE_VGA, (int)camera_get_effective_max_res(),
+                     camera_res_cap_source());
             return json_error(req, msg, HTTPD_400_BAD_REQUEST);
         }
-        new_cfg.resolution = (uint8_t)val;
+        new_cfg.cam_framesize = (uint8_t)val;
     }
-    if ((item = cJSON_GetObjectItem(root, "fps")) && cJSON_IsNumber(item))
-        new_cfg.fps = (uint8_t)item->valuedouble;
+    /* 契约 §4：cam_fps 1-30（此前无校验裸收，v1.3 修复） */
+    if ((item = cJSON_GetObjectItem(root, "cam_fps")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val < 1 || val > 30) {
+            cJSON_Delete(root);
+            return json_error(req, "cam_fps out of range (1-30)", HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.cam_fps = (uint8_t)val;
+    }
     if ((item = cJSON_GetObjectItem(root, "cam_quality")) && cJSON_IsNumber(item)) {
         int val = (int)item->valuedouble;
         if (val < CAMERA_QUALITY_MIN || val > CAMERA_QUALITY_MAX) {
@@ -463,33 +488,112 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
             cJSON_Delete(root);
             return json_error(req, msg, HTTPD_400_BAD_REQUEST);
         }
-        new_cfg.jpeg_quality = (uint8_t)val;
+        new_cfg.cam_quality = (uint8_t)val;
     }
-    if ((item = cJSON_GetObjectItem(root, "timezone")) && cJSON_IsString(item))
+    if ((item = cJSON_GetObjectItem(root, "cam_vflip")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val != 0 && val != 1) {
+            cJSON_Delete(root);
+            return json_error(req, "cam_vflip must be 0 or 1", HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.cam_vflip = (uint8_t)val;
+    }
+    if ((item = cJSON_GetObjectItem(root, "cam_hmirror")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val != 0 && val != 1) {
+            cJSON_Delete(root);
+            return json_error(req, "cam_hmirror must be 0 or 1", HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.cam_hmirror = (uint8_t)val;
+    }
+    if ((item = cJSON_GetObjectItem(root, "xclk_freq_mhz")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val != 10 && val != 16 && val != 20) {
+            cJSON_Delete(root);
+            return json_error(req, "xclk_freq_mhz must be 10, 16 or 20", HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.xclk_freq_mhz = (uint8_t)val;
+    }
+    if ((item = cJSON_GetObjectItem(root, "timezone")) && cJSON_IsString(item)) {
+        if (strlen(item->valuestring) >= sizeof(new_cfg.timezone)) {
+            cJSON_Delete(root);
+            return json_error(req, "timezone too long (max 47)", HTTPD_400_BAD_REQUEST);
+        }
         strncpy(new_cfg.timezone, item->valuestring, sizeof(new_cfg.timezone) - 1);
-    if ((item = cJSON_GetObjectItem(root, "motion_threshold")) && cJSON_IsNumber(item))
-        new_cfg.motion_threshold = (uint8_t)item->valuedouble;
-    if ((item = cJSON_GetObjectItem(root, "motion_cooldown")) && cJSON_IsNumber(item))
-        new_cfg.motion_cooldown = (uint8_t)item->valuedouble;
-    // v3 fields
+        new_cfg.timezone[sizeof(new_cfg.timezone) - 1] = '\0';
+    }
+    /* motion 家族超集（契约 §4 校验矩阵） */
+    if ((item = cJSON_GetObjectItem(root, "motion_enabled")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val != 0 && val != 1) {
+            cJSON_Delete(root);
+            return json_error(req, "motion_enabled must be 0 or 1", HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.motion_enabled = (uint8_t)val;
+    }
+    if ((item = cJSON_GetObjectItem(root, "motion_sensitivity")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val < 0 || val > 100) {
+            cJSON_Delete(root);
+            return json_error(req, "motion_sensitivity out of range (0-100)", HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.motion_sensitivity = (uint8_t)val;
+    }
+    if ((item = cJSON_GetObjectItem(root, "motion_cooldown_s")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val < 1 || val > 300) {
+            cJSON_Delete(root);
+            return json_error(req, "motion_cooldown_s out of range (1-300)", HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.motion_cooldown_s = (uint16_t)val;
+    }
+    if ((item = cJSON_GetObjectItem(root, "motion_active_interval_s")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val < 1 || val > 30) {
+            cJSON_Delete(root);
+            return json_error(req, "motion_active_interval_s out of range (1-30)", HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.motion_active_interval_s = (uint8_t)val;
+    }
     if ((item = cJSON_GetObjectItem(root, "wifi_ssid_2")) && cJSON_IsString(item))
-        strncpy(new_cfg.wifi_ssid2, item->valuestring, sizeof(new_cfg.wifi_ssid2) - 1);
+        strncpy(new_cfg.wifi_ssid_2, item->valuestring, sizeof(new_cfg.wifi_ssid_2) - 1);
     if ((item = cJSON_GetObjectItem(root, "wifi_pass_2")) && cJSON_IsString(item)) {
         if (strcmp(item->valuestring, "****") != 0)
-            strncpy(new_cfg.wifi_pass2, item->valuestring, sizeof(new_cfg.wifi_pass2) - 1);
+            strncpy(new_cfg.wifi_pass_2, item->valuestring, sizeof(new_cfg.wifi_pass_2) - 1);
     }
     if ((item = cJSON_GetObjectItem(root, "mdns_hostname")) && cJSON_IsString(item))
         strncpy(new_cfg.mdns_hostname, item->valuestring, sizeof(new_cfg.mdns_hostname) - 1);
-    if ((item = cJSON_GetObjectItem(root, "webhook_url")) && cJSON_IsString(item))
-        strncpy(new_cfg.webhook_url, item->valuestring, sizeof(new_cfg.webhook_url) - 1);
+    /* webhook 组（契约 §3.2） */
+    if ((item = cJSON_GetObjectItem(root, "alert_webhook_enabled")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val != 0 && val != 1) {
+            cJSON_Delete(root);
+            return json_error(req, "alert_webhook_enabled must be 0 or 1", HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.alert_webhook_enabled = (uint8_t)val;
+    }
+    if ((item = cJSON_GetObjectItem(root, "alert_webhook_url")) && cJSON_IsString(item))
+        strncpy(new_cfg.alert_webhook_url, item->valuestring, sizeof(new_cfg.alert_webhook_url) - 1);
     if ((item = cJSON_GetObjectItem(root, "webhook_secret")) && cJSON_IsString(item)) {
         if (strcmp(item->valuestring, "****") != 0)
             strncpy(new_cfg.webhook_secret, item->valuestring, sizeof(new_cfg.webhook_secret) - 1);
     }
-    if ((item = cJSON_GetObjectItem(root, "onvif_enable")) && cJSON_IsNumber(item))
-        new_cfg.onvif_enabled = (uint8_t)item->valuedouble;
-    if ((item = cJSON_GetObjectItem(root, "ws_enabled")) && cJSON_IsNumber(item))
-        new_cfg.ws_enabled = (uint8_t)item->valuedouble;
+    if ((item = cJSON_GetObjectItem(root, "onvif_enable")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val != 0 && val != 1) {
+            cJSON_Delete(root);
+            return json_error(req, "onvif_enable must be 0 or 1", HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.onvif_enable = (uint8_t)val;
+    }
+    if ((item = cJSON_GetObjectItem(root, "ws_enable")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val != 0 && val != 1) {
+            cJSON_Delete(root);
+            return json_error(req, "ws_enable must be 0 or 1", HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.ws_enable = (uint8_t)val;
+    }
     /* 契约 v1.1：拒绝空/过短密码 */
     if ((item = cJSON_GetObjectItem(root, "web_password")) && cJSON_IsString(item)) {
         if (strlen(item->valuestring) < 6) {
@@ -518,9 +622,12 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
      * /api/camera 已改为重启应用；本端点此前仍走热重配（2026-09-04 发现的
      * 漏网之鱼）——现与 /api/camera 对齐：保存 + 应答 + 1s 后重启。
      * 重启是干净的锤子，零竞态（姐妹板 PSRAM fb_count=2 不受此限）。 */
-    bool camera_changed = (new_cfg.resolution != old_resolution ||
-                           new_cfg.fps != old_fps ||
-                           new_cfg.jpeg_quality != old_jpeg_quality);
+    bool camera_changed = (new_cfg.cam_framesize != old_framesize ||
+                           new_cfg.cam_fps != old_fps ||
+                           new_cfg.cam_quality != old_quality ||
+                           new_cfg.cam_vflip != old_vflip ||
+                           new_cfg.cam_hmirror != old_hmirror ||
+                           new_cfg.xclk_freq_mhz != old_xclk);
 
     /* --- WiFi change detection --- */
     bool wifi_changed = (strcmp(new_cfg.wifi_ssid, old_wifi_ssid) != 0 ||
@@ -973,30 +1080,40 @@ static esp_err_t handler_api_camera_get(httpd_req_t *req)
     if (!data)
         return json_error(req, "alloc failed", HTTPD_500_INTERNAL_SERVER_ERROR);
 
-    /* 本板仅支持分辨率/JPEG 质量持久化；传感器微调字段不返回（前端按字段缺省隐藏） */
-    cJSON_AddStringToObject(data, "resolution", res_to_str(cfg->resolution));
-    cJSON_AddNumberToObject(data, "cam_framesize", (double)cfg->resolution);
-    cJSON_AddNumberToObject(data, "cam_quality",   (double)cfg->jpeg_quality);
+    cJSON_AddStringToObject(data, "resolution", res_to_str(cfg->cam_framesize));
+    cJSON_AddNumberToObject(data, "cam_framesize", (double)cfg->cam_framesize);
+    cJSON_AddNumberToObject(data, "cam_quality",   (double)cfg->cam_quality);
+    /* 契约 v1.0 核心字段（本板持久化并在 camera_init 应用） */
+    cJSON_AddNumberToObject(data, "cam_vflip",     (double)cfg->cam_vflip);
+    cJSON_AddNumberToObject(data, "cam_hmirror",   (double)cfg->cam_hmirror);
     /* 契约扩展（2026-09-04）：画质滑杆边界由板端声明，前端据此钳制输入 */
     cJSON_AddNumberToObject(data, "quality_min",   (double)CAMERA_QUALITY_MIN);
     cJSON_AddNumberToObject(data, "quality_max",   (double)CAMERA_QUALITY_MAX);
 
     /* 三层分辨率上限（2026-09-04 家族统一）：sensor ∩ board ∩ memory。
+     * value = 家族统一 framesize_t 刻度（契约 v1.3 §5）。
      * 板级常数 VGA 的实测依据（2026-09-03）：SVGA 使 cam_hal DMA 池
      * 61KB→96KB（800×600/5），空闲堆 45K→16K，暗光大帧再挤压 → 每秒
      * 分配失败、httpd 拒连、流 16s 断连螺旋（PIT-012）。"能出图"≠"能
-     * 稳定带流"。详见 camera_driver.h CAMERA_RES_BOARD_MAX 注。 */
+     * 稳定带流"。详见 camera_driver.h CAMERA_RES_BOARD_MAX 注。
+     * 本板 effective = VGA → supported_resolutions 只有 value 10 一项。 */
     {
-        static const char *res_labels[] = {
-            "VGA (640x480)", "SVGA (800x600)", "XGA (1024x768)", "UXGA (1600x1200)",
+        static const struct { const char *label; int value; } s_supported_res[] = {
+            { "VGA (640x480)",    10 },
+            { "SVGA (800x600)",   11 },
+            { "XGA (1024x768)",   12 },
+            { "HD (1280x720)",    13 },
+            { "SXGA (1280x1024)", 14 },
+            { "UXGA (1600x1200)", 15 },
         };
         int eff_max = (int)camera_get_effective_max_res();
         cJSON *res_arr = cJSON_CreateArray();
-        for (int i = 0; i <= eff_max && i < 4; i++) {
-            cJSON *item = cJSON_CreateObject();
-            cJSON_AddStringToObject(item, "label", res_labels[i]);
-            cJSON_AddNumberToObject(item, "value", i);
-            cJSON_AddItemToArray(res_arr, item);
+        for (size_t i = 0; i < sizeof(s_supported_res) / sizeof(s_supported_res[0]); i++) {
+            if (s_supported_res[i].value > eff_max) break;
+            cJSON *res_item = cJSON_CreateObject();
+            cJSON_AddStringToObject(res_item, "label", s_supported_res[i].label);
+            cJSON_AddNumberToObject(res_item, "value", s_supported_res[i].value);
+            cJSON_AddItemToArray(res_arr, res_item);
         }
         cJSON_AddItemToObject(data, "supported_resolutions", res_arr);
         /* 契约扩展（2026-09-04）：上限被哪一层钳制（sensor/board/memory） */
@@ -1029,16 +1146,18 @@ static esp_err_t handler_api_camera_post(httpd_req_t *req)
     cJSON *fs = cJSON_GetObjectItem(json, "cam_framesize");
     if (fs && cJSON_IsNumber(fs)) {
         int val = (int)fs->valuedouble;
-        /* 三层上限校验（同 GET 端点；本板实际由 board 层钳在 VGA） */
-        if (val < 0 || val > (int)camera_get_effective_max_res()) {
+        /* 三层上限校验（同 GET 端点；本板实际由 board 层钳在 VGA，
+         * 家族刻度下合法域 = 10..effective，其余一律 400） */
+        if (val < (int)FRAMESIZE_VGA || val > (int)camera_get_effective_max_res()) {
             cJSON_Delete(json);
             char msg[96];
             snprintf(msg, sizeof(msg),
-                     "cam_framesize out of range (0-%d, source: %s)",
-                     (int)camera_get_effective_max_res(), camera_res_cap_source());
+                     "cam_framesize out of range (%d-%d, source: %s)",
+                     (int)FRAMESIZE_VGA, (int)camera_get_effective_max_res(),
+                     camera_res_cap_source());
             return json_error(req, msg, HTTPD_400_BAD_REQUEST);
         }
-        newcfg.resolution = (uint8_t)val;
+        newcfg.cam_framesize = (uint8_t)val;
     }
 
     cJSON *q = cJSON_GetObjectItem(json, "cam_quality");
@@ -1051,12 +1170,41 @@ static esp_err_t handler_api_camera_post(httpd_req_t *req)
             cJSON_Delete(json);
             return json_error(req, msg, HTTPD_400_BAD_REQUEST);
         }
-        newcfg.jpeg_quality = (uint8_t)val;
+        newcfg.cam_quality = (uint8_t)val;
     }
 
-    /* cam_vflip / cam_brightness / cam_contrast / cam_saturation / cam_sharpness
-     * / cam_hmirror are accepted but not persisted — this board has no sensor
-     * override support. Sensor defaults apply on (re)init. */
+    /* cam_vflip / cam_hmirror：OV2640 寄存器可调，本板持久化并在
+     * camera_init（重启后）应用。cam_brightness / cam_contrast /
+     * cam_saturation / cam_sharpness 仍不持久化（本板未开通传感器
+     * 微调，前端按字段缺省隐藏）。 */
+    cJSON *vf = cJSON_GetObjectItem(json, "cam_vflip");
+    if (vf && cJSON_IsNumber(vf)) {
+        int val = (int)vf->valuedouble;
+        if (val != 0 && val != 1) {
+            cJSON_Delete(json);
+            return json_error(req, "cam_vflip must be 0 or 1", HTTPD_400_BAD_REQUEST);
+        }
+        newcfg.cam_vflip = (uint8_t)val;
+    }
+    cJSON *hm = cJSON_GetObjectItem(json, "cam_hmirror");
+    if (hm && cJSON_IsNumber(hm)) {
+        int val = (int)hm->valuedouble;
+        if (val != 0 && val != 1) {
+            cJSON_Delete(json);
+            return json_error(req, "cam_hmirror must be 0 or 1", HTTPD_400_BAD_REQUEST);
+        }
+        newcfg.cam_hmirror = (uint8_t)val;
+    }
+    cJSON *xc = cJSON_GetObjectItem(json, "xclk_freq_mhz");
+    if (xc && cJSON_IsNumber(xc)) {
+        int val = (int)xc->valuedouble;
+        if (val != 10 && val != 16 && val != 20) {
+            cJSON_Delete(json);
+            return json_error(req, "xclk_freq_mhz must be 10, 16 or 20", HTTPD_400_BAD_REQUEST);
+        }
+        newcfg.xclk_freq_mhz = (uint8_t)val;
+    }
+
     cJSON_Delete(json);
 
     esp_err_t ret = config_save(&newcfg);
@@ -1073,7 +1221,7 @@ static esp_err_t handler_api_camera_post(httpd_req_t *req)
         cJSON_AddBoolToObject(data, "rebooting", true);
         esp_err_t send_ret = json_ok(req, data);
         ESP_LOGW(TAG, "Camera config saved — rebooting to apply (quality=%u res=%u)",
-                 newcfg.jpeg_quality, newcfg.resolution);
+                 newcfg.cam_quality, newcfg.cam_framesize);
         vTaskDelay(pdMS_TO_TICKS(1000));
         esp_restart();
         return send_ret;
@@ -1310,26 +1458,32 @@ esp_err_t web_server_start(uint16_t port)
     httpd_register_uri_handler(s_server, &options_any);
 
 #ifdef CONFIG_MIBEECAM_ENABLE_WS
-    ws_clients_init();
-    httpd_uri_t uri_ws = {
-        .uri = "/ws",
-        .method = HTTP_GET,
-        .handler = ws_handler,
-        .is_websocket = true,
-        .handle_ws_control_frames = true,
-    };
-    httpd_register_uri_handler(s_server, &uri_ws);
+    /* 契约 §3.2 WebSocket 组：ws_enable=0 时不注册 /ws（也不订阅事件，
+     * 重启生效——能力位不变，仅运行时入口关闭） */
+    if (config_get()->ws_enable) {
+        ws_clients_init();
+        httpd_uri_t uri_ws = {
+            .uri = "/ws",
+            .method = HTTP_GET,
+            .handler = ws_handler,
+            .is_websocket = true,
+            .handle_ws_control_frames = true,
+        };
+        httpd_register_uri_handler(s_server, &uri_ws);
 
-    event_bus_subscribe(EVENT_MOTION_DETECTED, ws_event_handler, NULL, NULL);
-    event_bus_subscribe(EVENT_MOTION_END, ws_event_handler, NULL, NULL);
-    event_bus_subscribe(EVENT_WIFI_STATE_CHANGED, ws_event_handler, NULL, NULL);
-    event_bus_subscribe(EVENT_WIFI_SWITCHED_SSID, ws_event_handler, NULL, NULL);
-    event_bus_subscribe(EVENT_STREAM_CLIENT_CONNECTED, ws_event_handler, NULL, NULL);
-    event_bus_subscribe(EVENT_STREAM_CLIENT_DISCONNECTED, ws_event_handler, NULL, NULL);
-    event_bus_subscribe(EVENT_HEALTH_WARNING, ws_event_handler, NULL, NULL);
-    event_bus_subscribe(EVENT_UPLOAD_SUCCESS, ws_event_handler, NULL, NULL);
-    event_bus_subscribe(EVENT_UPLOAD_FAILED, ws_event_handler, NULL, NULL);
-    ESP_LOGI(TAG, "WS event subscriptions registered");
+        event_bus_subscribe(EVENT_MOTION_DETECTED, ws_event_handler, NULL, NULL);
+        event_bus_subscribe(EVENT_MOTION_END, ws_event_handler, NULL, NULL);
+        event_bus_subscribe(EVENT_WIFI_STATE_CHANGED, ws_event_handler, NULL, NULL);
+        event_bus_subscribe(EVENT_WIFI_SWITCHED_SSID, ws_event_handler, NULL, NULL);
+        event_bus_subscribe(EVENT_STREAM_CLIENT_CONNECTED, ws_event_handler, NULL, NULL);
+        event_bus_subscribe(EVENT_STREAM_CLIENT_DISCONNECTED, ws_event_handler, NULL, NULL);
+        event_bus_subscribe(EVENT_HEALTH_WARNING, ws_event_handler, NULL, NULL);
+        event_bus_subscribe(EVENT_UPLOAD_SUCCESS, ws_event_handler, NULL, NULL);
+        event_bus_subscribe(EVENT_UPLOAD_FAILED, ws_event_handler, NULL, NULL);
+        ESP_LOGI(TAG, "WS event subscriptions registered");
+    } else {
+        ESP_LOGI(TAG, "WS disabled in config (ws_enable=0), /ws not registered");
+    }
 #endif
 
     /* 静态兜底必须最后注册（见上方顺序说明） */

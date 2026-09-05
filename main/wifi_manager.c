@@ -125,13 +125,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 #ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
             // Backup SSID fallback logic
             const cam_config_t *cfg = config_get();
-            if (cfg->wifi_ssid2[0] != '\0') {
+            if (cfg->wifi_ssid_2[0] != '\0') {
                 if (s_active_ssid_index == 0) {
                     // Currently on primary — check fail count
                     s_primary_fail_count++;
                     if (s_primary_fail_count >= BACKUP_SSID_FAIL_THRESHOLD) {
                         ESP_LOGW(TAG, "Primary SSID failed %d times, switching to backup: %s",
-                                 s_primary_fail_count, cfg->wifi_ssid2);
+                                 s_primary_fail_count, cfg->wifi_ssid_2);
                         s_active_ssid_index = 1;
                         s_retry_count = 0;
                         event_t event = {
@@ -141,7 +141,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                             .payload_len = 0,
                         };
                         event_bus_publish(&event);
-                        wifi_start_sta(cfg->wifi_ssid2, cfg->wifi_pass2);
+                        wifi_start_sta(cfg->wifi_ssid_2, cfg->wifi_pass_2);
                         break;  // Skip normal retry — wifi_start_sta already called
                     }
                 } else {
@@ -346,7 +346,7 @@ esp_err_t wifi_start_sta(const char *ssid, const char *pass)
     if (strcmp(ssid, cfg->wifi_ssid) == 0) {
         s_active_ssid_index = 0;
         s_primary_fail_count = 0;
-    } else if (strcmp(ssid, cfg->wifi_ssid2) == 0) {
+    } else if (strcmp(ssid, cfg->wifi_ssid_2) == 0) {
         s_active_ssid_index = 1;
     }
 #endif

@@ -72,7 +72,7 @@ main/
 ├── main.c              # 15-step boot sequence (camera BEFORE WiFi — I2C conflict)
 ├── camera_driver.*     # OV2640 (8225N), JPEG, resolution control
 ├── wifi_manager.*      # STA/AP, backup-SSID auto-fallback, AMPDU disabled
-├── config_manager.*    # NVS-backed, v1→v2 auto-migration
+├── config_manager.*    # 契约 v1.0 逐键 NVS（mibee_cfg + schema_ver），legacy blob 一次性迁移
 ├── mjpeg_streamer.*    # Port 81 independent TCP server, multipart/x-mixed-replace
 ├── web_server.*        # Port 80 HTTP, REST API, SPIFFS static, WebSocket (/ws)
 ├── motion_detect.*     # Frame-difference + auto JPEG upload
@@ -128,7 +128,11 @@ Hold **BOOT** (GPIO 0) for 5 s → clears NVS, reboots into AP mode. (On `ai-thi
 
 - `snake_case` functions/vars, `s_` static prefix, `ESP_LOGx(TAG, ...)`, `esp_err_t` returns.
 - `sdkconfig.defaults` is the single source of truth for board config; pin numbers live in `camera_driver.c` via `CAMERA_MODEL_Air_ESP32S3` (the `esp32-camera` Air ESP32-S3 pin def — **not** the LuatOS documentation pinout).
-- Config persisted in NVS namespace `device_cfg`, struct versioned with v1→v2 migration in `config_manager.c`.
+- Config persisted as per-key NVS in namespace `mibee_cfg` with `schema_ver=1`（契约 v1.0,
+  `docs/config-contract.md`）；legacy blob（`mibee_cfg/config` 或前代 `device_cfg/config`，
+  v1/v2/v3）由 `config_init` 一次性迁移（`config_bak` 备份留存）。字段名 = 契约 JSON 名
+  （`cam_framesize`=framesize_t 刻度、`cam_quality`、`cam_fps`、`onvif_enable`、motion
+  超集 `motion_sensitivity` 等）。
 
 > **2026-09-04 摄像头配置边界补全（已烧录验证）**：实测 VGA q10/q8/q6 全健康
 > （q6 帧也才 22.6KB，但帧大小随场景复杂度浮动），家族统一 `CAMERA_QUALITY_MIN=10`

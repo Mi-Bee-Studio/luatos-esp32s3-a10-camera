@@ -7,6 +7,7 @@
  */
 
 #include "camera_driver.h"
+#include "config_manager.h"
 #include "esp_log.h"
 #include "esp_camera.h"
 #include "img_converters.h"
@@ -49,15 +50,13 @@ static const char *s_cap_source = "board";   /* 最近一次 effective 计算的
 
 /* ── Helpers ── */
 
+/* 家族统一刻度（契约 v1.3 §5）：camera_resolution_t 的值即 framesize_t 枚举 */
 static framesize_t resolution_to_framesize(camera_resolution_t res)
 {
-    switch (res) {
-        case CAMERA_RES_VGA:  return FRAMESIZE_VGA;
-        case CAMERA_RES_SVGA: return FRAMESIZE_SVGA;
-        case CAMERA_RES_XGA:  return FRAMESIZE_XGA;
-        case CAMERA_RES_UXGA: return FRAMESIZE_UXGA;
-        default:              return FRAMESIZE_VGA;
+    if ((int)res >= FRAMESIZE_VGA && (int)res <= FRAMESIZE_UXGA) {
+        return (framesize_t)res;
     }
+    return FRAMESIZE_VGA;
 }
 
 static const char* resolution_to_string(camera_resolution_t res)
@@ -66,6 +65,8 @@ static const char* resolution_to_string(camera_resolution_t res)
         case CAMERA_RES_VGA:  return "VGA";
         case CAMERA_RES_SVGA: return "SVGA";
         case CAMERA_RES_XGA:  return "XGA";
+        case CAMERA_RES_HD:   return "HD";
+        case CAMERA_RES_SXGA: return "SXGA";
         case CAMERA_RES_UXGA: return "UXGA";
         default:              return "Unknown";
     }
@@ -91,7 +92,7 @@ _Static_assert(FRAMESIZE_VGA == 10, "s_fs_dims pinned to esp32-camera 2.1.x enum
 
 static size_t fb_bytes_for_res(camera_resolution_t res)
 {
-    int idx = (int)res;
+    int idx = (int)res - (int)FRAMESIZE_VGA;
     if (idx < 0 || (size_t)idx >= sizeof(s_fs_dims) / sizeof(s_fs_dims[0])) {
         return 0;
     }
@@ -109,16 +110,16 @@ static bool fb_budget_ok(camera_resolution_t res)
 }
 
 /** sensor 层：查 esp32-camera 组件自带能力表（单一事实源，勿手抄 PID 表）。
- *  未初始化/未知 PID → 回退板级常数（不放宽）。 */
+ *  未初始化/未知 PID → 回退板级常数（不放宽）。统一刻度下值域同 framesize_t。 */
 static camera_resolution_t sensor_max_resolution(void)
 {
     if (s_camera_initialized) {
         sensor_t *s = esp_camera_sensor_get();
         camera_sensor_info_t *info = s ? esp_camera_sensor_get_info(&s->id) : NULL;
         if (info && (int)info->max_size >= (int)FRAMESIZE_VGA) {
-            int res = (int)info->max_size - (int)FRAMESIZE_VGA;
+            int res = (int)info->max_size;
             if (res > (int)CAMERA_RES_UXGA) {
-                res = (int)CAMERA_RES_UXGA;   /* 本地枚举天花板 */
+                res = (int)CAMERA_RES_UXGA;   /* 本板枚举天花板 */
             }
             return (camera_resolution_t)res;
         }
@@ -164,8 +165,8 @@ esp_err_t camera_init(camera_resolution_t resolution, uint8_t fps, uint8_t jpeg_
         }
     }
 
-    /* Validate parameters */
-    if (resolution >= CAMERA_RES_MAX) {
+    /* Validate parameters（家族刻度 10-15；越界回退 VGA）*/
+    if (resolution < CAMERA_RES_VGA || resolution > CAMERA_RES_UXGA) {
         ESP_LOGW(TAG, "Invalid resolution %d, defaulting to VGA", resolution);
         resolution = DEFAULT_RESOLUTION;
     }
@@ -179,8 +180,12 @@ esp_err_t camera_init(camera_resolution_t resolution, uint8_t fps, uint8_t jpeg_
         jpeg_quality = (jpeg_quality < CAMERA_QUALITY_MIN) ? CAMERA_QUALITY_MIN : CAMERA_QUALITY_MAX;
     }
 
-    /* XCLK frequency: 10MHz for <= 15fps, 20MHz for > 15fps */
-    uint32_t xclk_freq_hz = (fps <= 15) ? 10000000 : 20000000;
+    /* XCLK 频率：契约核心字段 xclk_freq_mhz（{10,16,20}，本板值 20）。
+     * 旧实现按 fps 启发式取 10/20MHz，契约化后改为读配置（运行时可调）。 */
+    uint32_t xclk_freq_hz = (uint32_t)config_get()->xclk_freq_mhz * 1000000;
+    if (xclk_freq_hz != 10000000 && xclk_freq_hz != 16000000 && xclk_freq_hz != 20000000) {
+        xclk_freq_hz = 20000000;   /* 越界安全默认 */
+    }
 
     camera_config_t config = {
         .pin_pwdn     = CAM_PIN_PWDN,
@@ -270,6 +275,15 @@ esp_err_t camera_init(camera_resolution_t resolution, uint8_t fps, uint8_t jpeg_
         /* Configure sensor for desired frame rate */
         if (sensor->set_pixformat) {
             sensor->set_pixformat(sensor, PIXFORMAT_JPEG);
+        }
+
+        /* 契约核心字段 cam_vflip / cam_hmirror（默认 0 = 传感器复位默认，
+         * 行为不变；变更走保存+重启，在 init 时应用）*/
+        if (sensor->set_vflip) {
+            sensor->set_vflip(sensor, config_get()->cam_vflip);
+        }
+        if (sensor->set_hmirror) {
+            sensor->set_hmirror(sensor, config_get()->cam_hmirror);
         }
     } else {
         ESP_LOGW(TAG, "Camera sensor info unavailable after init");

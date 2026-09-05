@@ -14,14 +14,18 @@
 #include "esp_camera.h"
 
 /**
- * Supported camera resolutions
+ * Supported camera resolutions — 家族统一刻度 = esp32-camera framesize_t
+ * （契约 v1.3 §5：VGA=10, SVGA=11, XGA=12, HD=13, SXGA=14, UXGA=15）。
+ * 旧自有刻度 0-3 由 config 迁移函数翻译（0→10, 1→11, 2→12, 3→15），
+ * 本板上限 VGA → 迁移后一切 >10 钳到 10。
  */
 typedef enum {
-    CAMERA_RES_VGA = 0,     /**< 640x480 */
-    CAMERA_RES_SVGA = 1,    /**< 800x600 */
-    CAMERA_RES_XGA = 2,     /**< 1024x768 */
-    CAMERA_RES_UXGA = 3,    /**< 1600x1200 */
-    CAMERA_RES_MAX
+    CAMERA_RES_VGA  = 10,   /**< 640x480   (FRAMESIZE_VGA)  */
+    CAMERA_RES_SVGA = 11,   /**< 800x600   (FRAMESIZE_SVGA) */
+    CAMERA_RES_XGA  = 12,   /**< 1024x768  (FRAMESIZE_XGA)  */
+    CAMERA_RES_HD   = 13,   /**< 1280x720  (FRAMESIZE_HD)   */
+    CAMERA_RES_SXGA = 14,   /**< 1280x1024 (FRAMESIZE_SXGA) */
+    CAMERA_RES_UXGA = 15,   /**< 1600x1200 (FRAMESIZE_UXGA) */
 } camera_resolution_t;
 
 /* JPEG quality bounds (lower = better quality / larger frames). The driver
@@ -60,11 +64,11 @@ camera_resolution_t camera_get_effective_max_res(void);
 const char *camera_res_cap_source(void);
 
 /**
- * Initialize the OV2640 camera with the given parameters.
+ * @brief Initialize the OV2640 camera with the given parameters.
  *
- * @param resolution  Desired resolution (default: CAMERA_RES_VGA)
+ * @param resolution  Desired resolution, framesize_t 刻度（default: VGA）
  * @param fps         Desired frame rate (default: 15)
- * @param jpeg_quality JPEG quality 0-63, lower = better (default: 12)
+ * @param jpeg_quality JPEG quality 10-63, lower = better (default: 12)
  * @return ESP_OK on success, error code on failure
  */
 esp_err_t camera_init(camera_resolution_t resolution, uint8_t fps, uint8_t jpeg_quality);
