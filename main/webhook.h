@@ -7,7 +7,7 @@
  * Auth: X-MiBee-Event header + optional X-MiBee-Signature (HMAC-SHA256).
  *
  * Default disabled. Enable via CONFIG_MIBEECAM_ENABLE_WEBHOOK compile flag
- * AND runtime config webhook_url non-empty.
+ * AND runtime config alert_webhook_enabled=1 with alert_webhook_url non-empty.
  */
 #ifndef WEBHOOK_H
 #define WEBHOOK_H
@@ -24,7 +24,7 @@ extern "C" {
  * @brief Initialize the webhook subsystem.
  *        Creates queue, starts webhook task. Subscribes to all event_bus events
  *        for automatic forwarding (if webhook_forward_all_events is enabled).
- *        No-op if webhook_url config is empty.
+ *        No-op if alert_webhook_enabled=0 or alert_webhook_url config is empty.
  * @return ESP_OK on success
  */
 esp_err_t webhook_init(void);

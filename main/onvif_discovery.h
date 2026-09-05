@@ -5,7 +5,7 @@
  * and responds with ProbeMatches containing the device's service address.
  *
  * Default disabled. Enable via CONFIG_MIBEECAM_ENABLE_ONVIF compile flag
- * AND runtime config onvif_enabled=1.
+ * AND runtime config onvif_enable=1.
  */
 #ifndef ONVIF_DISCOVERY_H
 #define ONVIF_DISCOVERY_H

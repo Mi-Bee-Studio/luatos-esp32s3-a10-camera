@@ -337,9 +337,9 @@ static void handle_cwjap2_query(const char *params)
     (void)params;
     const cam_config_t *cfg = config_get();
     printf("\r\n");
-    printf("Backup SSID: %s\r\n", cfg->wifi_ssid2[0] ? cfg->wifi_ssid2 : "(none)");
+    printf("Backup SSID: %s\r\n", cfg->wifi_ssid_2[0] ? cfg->wifi_ssid_2 : "(none)");
     printf("Active SSID: %s\r\n", cfg->wifi_ssid);
-    printf("Backup status: %s\r\n", cfg->wifi_ssid2[0] ? "configured" : "not set");
+    printf("Backup status: %s\r\n", cfg->wifi_ssid_2[0] ? "configured" : "not set");
     at_ok();
 }
 
@@ -389,10 +389,10 @@ static void handle_cwjap2_set(const char *params)
     /* Copy config from current, overwrite backup wifi fields */
     cam_config_t cfg;
     config_get_copy(&cfg);
-    strncpy(cfg.wifi_ssid2, ssid_str, sizeof(cfg.wifi_ssid2) - 1);
-    cfg.wifi_ssid2[sizeof(cfg.wifi_ssid2) - 1] = '\0';
-    strncpy(cfg.wifi_pass2, pwd_str, sizeof(cfg.wifi_pass2) - 1);
-    cfg.wifi_pass2[sizeof(cfg.wifi_pass2) - 1] = '\0';
+    strncpy(cfg.wifi_ssid_2, ssid_str, sizeof(cfg.wifi_ssid_2) - 1);
+    cfg.wifi_ssid_2[sizeof(cfg.wifi_ssid_2) - 1] = '\0';
+    strncpy(cfg.wifi_pass_2, pwd_str, sizeof(cfg.wifi_pass_2) - 1);
+    cfg.wifi_pass_2[sizeof(cfg.wifi_pass_2) - 1] = '\0';
 
     esp_err_t ret = config_set(&cfg);
     if (ret == ESP_OK) {
@@ -514,6 +514,7 @@ static void handle_name_set(const char *params)
 typedef enum {
     FIELD_TYPE_STRING,
     FIELD_TYPE_U8,
+    FIELD_TYPE_U16,
 } field_type_t;
 
 typedef struct {
@@ -521,8 +522,8 @@ typedef struct {
     field_type_t type;
     size_t offset;
     size_t max_len;       /* for strings: max length including null */
-    uint8_t min_val;      /* for U8: minimum */
-    uint8_t max_val;      /* for U8: maximum */
+    long min_val;         /* for U8/U16: minimum */
+    long max_val;         /* for U8/U16: maximum */
 } config_field_t;
 
 #define STRING_FIELD(field) \
@@ -531,24 +532,35 @@ typedef struct {
 #define U8_FIELD(field, minv, maxv) \
     { #field, FIELD_TYPE_U8, offsetof(cam_config_t, field), 0, minv, maxv }
 
+#define U16_FIELD(field, minv, maxv) \
+    { #field, FIELD_TYPE_U16, offsetof(cam_config_t, field), 0, minv, maxv }
+
+/* CFGGET/CFGSET 白名单（PIT-022 second-fox：字段改名后表必须同步）。
+ * 键名 = 契约 JSON 名；xclk_freq_mhz 域 {10,16,20} 非连续，不入表。 */
 static const config_field_t s_config_fields[] = {
     STRING_FIELD(wifi_ssid),
     STRING_FIELD(wifi_pass),
-    STRING_FIELD(wifi_ssid2),
-    STRING_FIELD(wifi_pass2),
+    STRING_FIELD(wifi_ssid_2),
+    STRING_FIELD(wifi_pass_2),
     STRING_FIELD(device_name),
     STRING_FIELD(server_url),
     STRING_FIELD(timezone),
     STRING_FIELD(web_password),
     STRING_FIELD(mdns_hostname),
-    STRING_FIELD(webhook_url),
-    U8_FIELD(resolution,        0, 0),   /* 本板锁定 VGA（DRAM 约束，PIT-012/021） */
-    U8_FIELD(fps,               1, 30),
-    U8_FIELD(jpeg_quality,      10, 63),  /* 家族画质下界（fb=w*h/5 预算，PIT-021） */
-    U8_FIELD(motion_threshold,  1, 255),
-    U8_FIELD(motion_cooldown,   1, 255),
-    U8_FIELD(onvif_enabled,     0, 1),
-    U8_FIELD(ws_enabled,        0, 1),
+    STRING_FIELD(alert_webhook_url),
+    STRING_FIELD(webhook_secret),
+    U8_FIELD(cam_framesize,        10, 10),  /* 家族刻度；本板锁定 VGA（DRAM 约束，PIT-012/021） */
+    U8_FIELD(cam_fps,               1, 30),
+    U8_FIELD(cam_quality,          10, 63),  /* 家族画质下界（fb=w*h/5 预算，PIT-021） */
+    U8_FIELD(cam_vflip,             0, 1),
+    U8_FIELD(cam_hmirror,           0, 1),
+    U8_FIELD(motion_enabled,        0, 1),
+    U8_FIELD(motion_sensitivity,    0, 100),
+    U16_FIELD(motion_cooldown_s,    1, 300),
+    U8_FIELD(motion_active_interval_s, 1, 30),
+    U8_FIELD(onvif_enable,          0, 1),
+    U8_FIELD(ws_enable,             0, 1),
+    U8_FIELD(alert_webhook_enabled, 0, 1),
 };
 static const int s_config_fields_count = sizeof(s_config_fields) / sizeof(s_config_fields[0]);
 
@@ -592,11 +604,21 @@ static esp_err_t config_field_set_from_str(cam_config_t *cfg, const config_field
 
     if (f->type == FIELD_TYPE_U8) {
         long val = strtol(value, NULL, 10);
-        if (val < (long)f->min_val || val > (long)f->max_val) {
+        if (val < f->min_val || val > f->max_val) {
             return ESP_ERR_INVALID_ARG;
         }
         uint8_t *dest = (uint8_t *)((uint8_t *)cfg + f->offset);
         *dest = (uint8_t)val;
+        return ESP_OK;
+    }
+
+    if (f->type == FIELD_TYPE_U16) {
+        long val = strtol(value, NULL, 10);
+        if (val < f->min_val || val > f->max_val) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        uint16_t *dest = (uint16_t *)((uint8_t *)cfg + f->offset);
+        *dest = (uint16_t)val;
         return ESP_OK;
     }
 
@@ -634,6 +656,9 @@ static void handle_cfgget(const char *params)
         at_send("+CFGGET:%s=%s", f->name, s);
     } else if (f->type == FIELD_TYPE_U8) {
         uint8_t v = *(const uint8_t *)config_field_ptr(cfg, f);
+        at_send("+CFGGET:%s=%u", f->name, (unsigned)v);
+    } else if (f->type == FIELD_TYPE_U16) {
+        uint16_t v = *(const uint16_t *)config_field_ptr(cfg, f);
         at_send("+CFGGET:%s=%u", f->name, (unsigned)v);
     }
     at_ok();
@@ -771,27 +796,28 @@ static void handle_status(const char *params)
     printf("SSID:       %s\r\n", cfg->wifi_ssid[0] ? cfg->wifi_ssid : "(none)");
     printf("IP:         %s\r\n", wifi_get_ip_str());
     printf("Camera:     res=%s quality=%u [%d-%d]\r\n",
-           cfg->resolution == 0 ? "VGA" : "?", cfg->jpeg_quality,
+           cfg->cam_framesize == CAMERA_RES_VGA ? "VGA" : "?", cfg->cam_quality,
            CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
     at_ok();
 }
 
-/** AT+CAMRES? / AT+CAMRES=n — 三层上限（本板实际由 board 层钳在 VGA） */
+/** AT+CAMRES? / AT+CAMRES=n — 三层上限（本板实际由 board 层钳在 VGA；
+ *  value 为家族统一 framesize_t 刻度，本板仅 10=VGA） */
 static void handle_camres(const char *params)
 {
     const cam_config_t *cfg = config_get();
     int eff_max = (int)camera_get_effective_max_res();
     if (params == NULL || params[0] == '?' || params[0] == '\0') {
-        printf("+CAMRES:%u  supported: 0-%d (cap source: %s)\r\n",
-               cfg->resolution, eff_max, camera_res_cap_source());
+        printf("+CAMRES:%u  supported: %d-%d (cap source: %s)\r\n",
+               cfg->cam_framesize, (int)CAMERA_RES_VGA, eff_max, camera_res_cap_source());
         at_ok();
         return;
     }
     int n = atoi(params);
-    if (n < 0 || n > eff_max) {
+    if (n < (int)CAMERA_RES_VGA || n > eff_max) {
         char msg[80];
-        snprintf(msg, sizeof(msg), "resolution must be 0-%d (cap source: %s)",
-                 eff_max, camera_res_cap_source());
+        snprintf(msg, sizeof(msg), "resolution must be %d-%d (cap source: %s)",
+                 (int)CAMERA_RES_VGA, eff_max, camera_res_cap_source());
         at_error_msg(msg);
         return;
     }
@@ -804,7 +830,7 @@ static void handle_camqual(const char *params)
     cam_config_t newcfg = *config_get();
     if (params == NULL || params[0] == '?' || params[0] == '\0') {
         printf("+CAMQUAL:%u [%d-%d] (applies after reboot on this board)\r\n",
-               newcfg.jpeg_quality, CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
+               newcfg.cam_quality, CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX);
         at_ok();
         return;
     }
@@ -816,11 +842,11 @@ static void handle_camqual(const char *params)
         at_error_msg(msg);
         return;
     }
-    if (n == (int)newcfg.jpeg_quality) {
+    if (n == (int)newcfg.cam_quality) {
         at_ok();
         return;
     }
-    newcfg.jpeg_quality = (uint8_t)n;
+    newcfg.cam_quality = (uint8_t)n;
     if (config_save(&newcfg) != ESP_OK) {
         at_error_msg("save failed");
         return;

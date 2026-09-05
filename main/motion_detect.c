@@ -264,9 +264,12 @@ static void motion_detection_task(void *arg)
         bool motion = false;
         if (total > 0) {
             uint8_t percent = (uint8_t)((changed * 100) / total);
-            motion = percent >= cfg->motion_threshold;
-            ESP_LOGD(TAG, "Frame diff: %u/%u = %u%% (threshold=%u%%)",
-                     (unsigned)changed, (unsigned)total, percent, cfg->motion_threshold);
+            /* 契约 §6.1 模型收敛：sensitivity 越大越灵敏 → 内部像素差
+             * 阈值 = 100 - sensitivity（与旧 motion_threshold 语义一致） */
+            uint8_t threshold = (uint8_t)(100 - (cfg->motion_sensitivity > 100 ? 100 : cfg->motion_sensitivity));
+            motion = percent >= threshold;
+            ESP_LOGD(TAG, "Frame diff: %u/%u = %u%% (sensitivity=%u%%, threshold=%u%%)",
+                     (unsigned)changed, (unsigned)total, percent, cfg->motion_sensitivity, threshold);
         }
 
         /* Free frame B buffer */
@@ -362,7 +365,7 @@ static void motion_detection_task(void *arg)
         /* Check cooldown expiration */
         if (s_in_cooldown) {
             int64_t elapsed_us = esp_timer_get_time() - s_cooldown_start_us;
-            int64_t cooldown_us = (int64_t)cfg->motion_cooldown * 1000000LL;
+            int64_t cooldown_us = (int64_t)cfg->motion_cooldown_s * 1000000LL;
             if (elapsed_us >= cooldown_us) {
                 s_in_cooldown = false;
                 ESP_LOGD(TAG, "Cooldown expired");
@@ -422,8 +425,8 @@ esp_err_t motion_detect_start(void)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Motion detection started (threshold=%u%%, cooldown=%us)",
-             config_get()->motion_threshold, config_get()->motion_cooldown);
+    ESP_LOGI(TAG, "Motion detection started (sensitivity=%u%%, cooldown=%us)",
+             config_get()->motion_sensitivity, (unsigned)config_get()->motion_cooldown_s);
     return ESP_OK;
 }
 

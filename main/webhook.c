@@ -133,13 +133,13 @@ static void webhook_task(void *arg)
 
         /* Re-read config each iteration (may have changed at runtime) */
         const cam_config_t *cfg = config_get();
-        if (cfg->webhook_url[0] == '\0') {
-            ESP_LOGW(TAG, "Webhook URL empty, dropping event: %s", item.event_type);
+        if (!cfg->alert_webhook_enabled || cfg->alert_webhook_url[0] == '\0') {
+            ESP_LOGW(TAG, "Webhook disabled or URL empty, dropping event: %s", item.event_type);
             continue;
         }
 
         /* Warn if HTTPS URL (not supported yet) */
-        if (strncmp(cfg->webhook_url, "https://", 8) == 0) {
+        if (strncmp(cfg->alert_webhook_url, "https://", 8) == 0) {
             ESP_LOGW(TAG, "HTTPS webhooks not supported yet, using HTTP");
         }
 
@@ -174,7 +174,7 @@ static void webhook_task(void *arg)
 
         /* --- HTTP POST --- */
         esp_http_client_config_t http_cfg = {
-            .url = cfg->webhook_url,
+            .url = cfg->alert_webhook_url,
             .method = HTTP_METHOD_POST,
             .timeout_ms = 5000,
             .disable_auto_redirect = true,
@@ -240,8 +240,8 @@ esp_err_t webhook_init(void)
     }
 
     const cam_config_t *cfg = config_get();
-    if (cfg->webhook_url[0] == '\0') {
-        ESP_LOGI(TAG, "Webhook URL empty, not starting webhook task");
+    if (!cfg->alert_webhook_enabled || cfg->alert_webhook_url[0] == '\0') {
+        ESP_LOGI(TAG, "Webhook disabled or URL empty, not starting webhook task");
         s_webhook_active = false;
         return ESP_OK;
     }
@@ -300,7 +300,7 @@ esp_err_t webhook_init(void)
 
     s_webhook_active = true;
     ESP_LOGI(TAG, "Webhook initialized: %s (subscribed to %d event types)",
-             cfg->webhook_url, s_sub_count);
+             cfg->alert_webhook_url, s_sub_count);
     return ESP_OK;
 }
 

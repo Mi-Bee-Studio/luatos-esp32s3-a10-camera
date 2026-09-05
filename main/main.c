@@ -81,19 +81,24 @@ static void wifi_state_cb(wifi_state_t state, void *user_data)
 
         /* Start motion detection (only if heap is sufficient — motion detection
          * competes with MJPEG streaming for camera access and needs ~20KB for
-         * JPEG copy buffers. On PSRAM-less boards, skip when heap is tight.) */
+         * JPEG copy buffers. On PSRAM-less boards, skip when heap is tight.
+         * 契约 §3.2：motion_enabled=0 时不启动任务) */
         if (!s_motion_started) {
-            size_t free_heap = esp_get_free_heap_size();
-            if (free_heap < 30000) {
-                ESP_LOGW(TAG, "Motion detection skipped (heap %uB < 30KB threshold — NVR/streaming mode)",
-                         (unsigned)free_heap);
+            if (!config_get()->motion_enabled) {
+                ESP_LOGI(TAG, "Motion detection disabled in config (motion_enabled=0)");
             } else {
-                esp_err_t ret = motion_detect_start();
-                if (ret == ESP_OK) {
-                    s_motion_started = true;
-                    ESP_LOGI(TAG, "Motion detection started");
+                size_t free_heap = esp_get_free_heap_size();
+                if (free_heap < 30000) {
+                    ESP_LOGW(TAG, "Motion detection skipped (heap %uB < 30KB threshold — NVR/streaming mode)",
+                             (unsigned)free_heap);
                 } else {
-                    ESP_LOGE(TAG, "Motion detection start failed: %s", esp_err_to_name(ret));
+                    esp_err_t ret = motion_detect_start();
+                    if (ret == ESP_OK) {
+                        s_motion_started = true;
+                        ESP_LOGI(TAG, "Motion detection started");
+                    } else {
+                        ESP_LOGE(TAG, "Motion detection start failed: %s", esp_err_to_name(ret));
+                    }
                 }
             }
         }
@@ -102,15 +107,15 @@ static void wifi_state_cb(wifi_state_t state, void *user_data)
         /* Step 13.5: Webhook init (conditional on config URL) */
         {
             const cam_config_t *cfg = config_get();
-            if (cfg->webhook_url[0] != '\0') {
+            if (cfg->alert_webhook_enabled && cfg->alert_webhook_url[0] != '\0') {
                 esp_err_t wh_ret = webhook_init();
                 if (wh_ret != ESP_OK) {
                     ESP_LOGW(TAG, "Webhook init failed: %s (continuing)", esp_err_to_name(wh_ret));
                 } else {
-                    ESP_LOGI(TAG, "[13.5/14] Webhook initialized (URL: %s)", cfg->webhook_url);
+                    ESP_LOGI(TAG, "[13.5/14] Webhook initialized (URL: %s)", cfg->alert_webhook_url);
                 }
             } else {
-                ESP_LOGI(TAG, "Webhook disabled (no URL configured)");
+                ESP_LOGI(TAG, "Webhook disabled (alert_webhook_enabled=0 or no URL configured)");
             }
         }
 #endif
@@ -119,7 +124,7 @@ static void wifi_state_cb(wifi_state_t state, void *user_data)
         /* Step 13.7: ONVIF conditional start */
         {
             const cam_config_t *cfg = config_get();
-            if (cfg->onvif_enabled) {
+            if (cfg->onvif_enable) {
                 esp_err_t onvif_ret = onvif_discovery_start();
                 if (onvif_ret != ESP_OK) {
                     ESP_LOGW(TAG, "ONVIF discovery start failed: %s (continuing)", esp_err_to_name(onvif_ret));
@@ -137,7 +142,7 @@ static void wifi_state_cb(wifi_state_t state, void *user_data)
                     }
                 }
             } else {
-                ESP_LOGI(TAG, "ONVIF disabled (config onvif_enabled=0)");
+                ESP_LOGI(TAG, "ONVIF disabled (config onvif_enable=0)");
             }
         }
 #endif
@@ -247,13 +252,14 @@ void app_main(void)
     /* Step 5: Camera init (BEFORE WiFi to avoid I2C bus conflict) */
     {
         const cam_config_t *cam_cfg = config_get();
-        ret = camera_init((camera_resolution_t)cam_cfg->resolution, cam_cfg->fps, cam_cfg->jpeg_quality);
+        ret = camera_init((camera_resolution_t)cam_cfg->cam_framesize,
+                          cam_cfg->cam_fps, cam_cfg->cam_quality);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Camera init failed: %s", esp_err_to_name(ret));
             led_set_status(LED_ERROR);
         } else {
             ESP_LOGI(TAG, "[5/14] Camera initialized (%s, %d fps, quality %d)",
-                     camera_get_sensor_name(), cam_cfg->fps, cam_cfg->jpeg_quality);
+                     camera_get_sensor_name(), cam_cfg->cam_fps, cam_cfg->cam_quality);
         }
     }
 
@@ -352,7 +358,7 @@ void app_main(void)
         /* Step 13.7: ONVIF conditional start (AP mode) */
         {
             const cam_config_t *cfg = config_get();
-            if (cfg->onvif_enabled) {
+            if (cfg->onvif_enable) {
                 esp_err_t onvif_ret = onvif_discovery_start();
                 if (onvif_ret != ESP_OK) {
                     ESP_LOGW(TAG, "ONVIF discovery start failed: %s (continuing)", esp_err_to_name(onvif_ret));
