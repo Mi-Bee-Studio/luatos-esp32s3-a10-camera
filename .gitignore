@@ -1,105 +1,105 @@
-# ============================================
-# ESP-IDF 项目 Git 忽略文件
-# ============================================
+# MiBee Cam family .gitignore (byte-identical across the four cam repos)
 
-# --------------------------------------------
-# 构建输出目录
-# --------------------------------------------
+# Build artifacts
 build/
-out/                        # 输出目录
-output/                     # 输出目录
-dist/                       # 分发目录
+build2/
+build3/
+out/
+output/
+dist/
+partition_table/
+bootloader/build/
 
-# --------------------------------------------
-# ESP-IDF 生成的配置文件
-# --------------------------------------------
+# ESP-IDF generated config (sdkconfig.defaults stays tracked; local sdkconfig
+# is the injection point for local-only credentials — never commit it)
 sdkconfig
-# 编译生成的完整 sdkconfig（sdkconfig.defaults 保留）
 sdkconfig.old
-# 旧版本 sdkconfig 备份
-
-# --------------------------------------------
-# 二进制和固件文件
-# --------------------------------------------
-*.bin                       # 固件二进制文件
-*.elf                       # ELF 可执行文件
-*.map                       # 内存映射文件
-*.hex                       # Intel HEX 格式文件
-*.lst                       # 汇编列表文件
-
-# --------------------------------------------
-# 对象文件和中间文件
-# --------------------------------------------
-*.o                         # 对象文件
-*.obj                       # 对象文件
-*.a                         # 静态库文件
-*.so                        # 动态库文件
-*.d                         # 依赖文件
-
-# --------------------------------------------
-# 日志和临时文件
-# --------------------------------------------
-*.log                       # 日志文件
-*.tmp                       # 临时文件
-*.temp                      # 临时文件
-*.swp                       # Vim 交换文件
-*.swo                       # Vim 交换文件
-*~                          # 备份文件
-
-# --------------------------------------------
-# IDE 和编辑器配置
-# --------------------------------------------
-.vscode/                    # VS Code 配置（可选保留）
-.idea/                      # JetBrains IDE 配置
-*.iml                       # IntelliJ 模块文件
-*.user                      # 用户特定配置
-
-# --------------------------------------------
-# 操作系统文件
-# --------------------------------------------
-.DS_Store                   # macOS 系统文件
-Thumbs.db                   # Windows 缩略图缓存
-*.lnk                       # Windows 快捷方式
-
-# --------------------------------------------
-# Python 缓存
-# --------------------------------------------
-__pycache__/                # Python 字节码缓存
-*.pyc                       # Python 编译文件
-*.pyo                       # Python 优化文件
-*.egg-info/                 # Python 包信息
-
-# --------------------------------------------
-# 其他工具生成的文件
-# --------------------------------------------
-.ccls-cache/                # CCLS 缓存
-.clangd/                    # Clangd 缓存
-compile_commands.json       # 编译数据库（自动生成）
-
-# --------------------------------------------
-# 项目特定忽略
-# --------------------------------------------
-# 保留 sdkconfig.defaults 作为模板，但忽略实际使用的 sdkconfig
-# 这样每个开发者可以根据自己的环境配置，同时保留默认配置作为参考
-
-verify_hardware.bat
-
-# --------------------------------------------
-# Internal development files
-# --------------------------------------------
-.sisyphus/
-.omo/
-package-lock.json
-.trae/
-AGENTS.md
-tmp/
-.vscode/
-.playwright-mcp/
-
-# --------------------------------------------
-# ESP-IDF component manager
-# --------------------------------------------
 managed_components/
 dependencies.lock
+
+# Binary / object artifacts
+*.o
+*.obj
+*.a
+*.so
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+
+# Editor / IDE / index
+.vscode/
+.idea/
+*.iml
+*.user
+.clangd/
+.ccls-cache/
+compile_commands.json
+.trae/
+codegraph/
+.codegraph/
+
+# Internal tool caches
+.sisyphus/
+.omo/
+.cache/
+setup_idf_env.ps1
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+.pytest_cache/
+.coverage
+htmlcov/
+*.gcda
+*.gcno
+*.gcov
+
+# Logs and local runtime artifacts (serial collectors etc.)
+*.log
+*.out
+*.tmp
+*.temp
 tools/overnight_serial.log
 tools/overnight_reboots.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.lnk
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+*~
+*.swp
+*.swo
+*.bak
+*#
+
+# Local-only content
+/*-test.png
+/*-check.png
+tmp/
+docs/superpowers/
+docs/stream-push-analysis/
+.github/copilot-instructions.md
+config.txt
+verify_hardware.bat
+build_log.txt
+.playwright-mcp/
+$null
