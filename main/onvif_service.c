@@ -24,7 +24,7 @@
 
 #ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
 
-static const char *TAG = "onvif_s";
+static const char *TAG = "onvif_svc";
 
 /* ------------------------------------------------------------------ */
 /*  SOAP XML helpers                                                   */
@@ -112,7 +112,8 @@ static esp_err_t handle_http_probe(httpd_req_t *req, const char *body)
         "<wsdd:Types>dn:NetworkVideoTransmitter</wsdd:Types>"
         "<wsdd:Scopes>"
         "onvif://www.onvif.org/Profile/Streaming "
-        "onvif://www.onvif.org/Model/MiBeeCam"
+        "onvif://www.onvif.org/name/MiBeeCam "
+        "onvif://www.onvif.org/hardware/MiBeeCam"
         "</wsdd:Scopes>"
         "<wsdd:XAddrs>http://%s/onvif/device_service</wsdd:XAddrs>"
         "<wsdd:MetadataVersion>1</wsdd:MetadataVersion>"

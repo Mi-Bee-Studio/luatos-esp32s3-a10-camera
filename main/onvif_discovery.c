@@ -26,7 +26,7 @@
 
 #ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
 
-static const char *TAG = "onvif_d";
+static const char *TAG = "onvif_disc";
 
 #define ONVIF_MULTICAST_ADDR "239.255.255.250"
 #define ONVIF_PORT            3702
@@ -67,7 +67,8 @@ static const char *PROBE_MATCHES_TEMPLATE =
     "<wsdd:Types>dn:NetworkVideoTransmitter</wsdd:Types>\r\n"
     "<wsdd:Scopes>"
     "onvif://www.onvif.org/Profile/Streaming "
-    "onvif://www.onvif.org/Model/MiBeeCam"
+    "onvif://www.onvif.org/name/MiBeeCam "
+    "onvif://www.onvif.org/hardware/MiBeeCam"
     "</wsdd:Scopes>\r\n"
     "<wsdd:XAddrs>http://%s/onvif/device_service</wsdd:XAddrs>\r\n"
     "<wsdd:MetadataVersion>1</wsdd:MetadataVersion>\r\n"
@@ -103,7 +104,8 @@ static const char *HELLO_TEMPLATE =
     "<wsdd:Types>dn:NetworkVideoTransmitter</wsdd:Types>\r\n"
     "<wsdd:Scopes>"
     "onvif://www.onvif.org/Profile/Streaming "
-    "onvif://www.onvif.org/Model/MiBeeCam"
+    "onvif://www.onvif.org/name/MiBeeCam "
+    "onvif://www.onvif.org/hardware/MiBeeCam"
     "</wsdd:Scopes>\r\n"
     "<wsdd:XAddrs>http://%s/onvif/device_service</wsdd:XAddrs>\r\n"
     "<wsdd:MetadataVersion>1</wsdd:MetadataVersion>\r\n"

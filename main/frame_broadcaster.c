@@ -19,7 +19,7 @@
 #include "freertos/semphr.h"
 #include <string.h>
 
-static const char *TAG = "frame_bus";
+static const char *TAG = "frame_broadcaster";
 
 /* Maximum frame size: 50KB for VGA JPEG */
 #define MAX_FRAME_SIZE (50 * 1024)
