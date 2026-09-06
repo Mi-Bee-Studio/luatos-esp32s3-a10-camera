@@ -32,7 +32,7 @@
 #include <lwip/netdb.h>
 #include <errno.h>
 
-static const char *TAG = "mjpeg";
+static const char *TAG = "mjpeg_streamer";
 
 /* ---------- Stream protocol constants ---------- */
 
