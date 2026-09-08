@@ -700,7 +700,7 @@ static esp_err_t handler_capabilities(httpd_req_t *req)
     }
 
     /* 契约 v1.0：12 个布尔能力位 + api_version/wifi_scan（见 docs/api-contract.md） */
-    cJSON_AddStringToObject(data, "api_version", "1.3");
+    cJSON_AddStringToObject(data, "api_version", "1.5");
 #ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
     cJSON_AddBoolToObject(data, "wifi_scan", true);
 #else
@@ -731,6 +731,11 @@ static esp_err_t handler_capabilities(httpd_req_t *req)
     cJSON_AddBoolToObject(data, "mdns",      false);
 #endif
 
+
+#if CONFIG_MIBEE_CSI_MOTION
+    /* 契约 v1.4：WiFi CSI 运动感知（编译期门控，恒定；true ⇒ /ws csi_status 心跳） */
+    cJSON_AddBoolToObject(data, "csi_motion", true);
+#endif
     return json_ok(req, data);
 }
 
@@ -955,7 +960,23 @@ static esp_err_t handler_static(httpd_req_t *req)
 
     ESP_LOGD(TAG, "Serving static file: %s", filepath);
 
-    FILE *f = fopen(filepath, "r");
+    /* gzip 协商（PIT-038）：客户端支持且 SPIFFS 有 <path>.gz 时优先发送
+     * （tools/compress_ui.py 产物，~4x 缩身）。本板无 PSRAM，开 CSI 后裸发
+     * 大资产会在 0-4KB 处卡死——lwIP TX pbuf 撑不住。
+     * Content-Type 仍按原始路径判定。 */
+    char gzpath[1056];
+    snprintf(gzpath, sizeof(gzpath), "%s.gz", filepath);
+    FILE *f = NULL;
+    char ae[64] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Accept-Encoding", ae, sizeof(ae)) == ESP_OK &&
+        strstr(ae, "gzip") != NULL &&
+        (f = fopen(gzpath, "r")) != NULL) {
+        httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+        httpd_resp_set_hdr(req, "Vary", "Accept-Encoding");
+    }
+    if (!f) {
+        f = fopen(filepath, "r");
+    }
     if (!f) {
         httpd_resp_send_404(req);
         return ESP_FAIL;
@@ -1333,8 +1354,13 @@ esp_err_t web_server_start(uint16_t port)
     config.server_port = port;
     config.max_uri_handlers = 30;  /* was 20 — headroom for new unified API endpoints */
     config.stack_size = 8192;
-    config.recv_wait_timeout = 30;
-    config.send_wait_timeout = 30;
+    /* PIT-038：默认 max_open_sockets=7（含 3 内部保留=客户端仅 4 槽），浏览器
+     * 首屏 6 并发 + WS + 健康自探测必超限 → app.js/i18n.js 随机夭折 → SPA
+     * 静态壳死页。抬到 10（各槽 ~1-2KB 堆、lru_purge 兜底）。 */
+    config.max_open_sockets = 10;
+    /* 30s→10/5s：弱链路卡死的传输不再钉死 httpd 工作槽半分钟（对齐 seeed） */
+    config.recv_wait_timeout = 10;
+    config.send_wait_timeout = 5;
     config.lru_purge_enable = true;
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.open_fn = on_session_open;  /* TCP_NODELAY + keepalive per socket */

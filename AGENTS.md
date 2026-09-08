@@ -279,3 +279,19 @@ This board returns the following from `GET /api/capabilities`:
   accept 后 `SO_SNDTIMEO=10s` 兜底零窗口。
 - 教训：单仓修的家族缺陷必须当天评估姐妹仓同函数形态——seeed 有探测本仓没有，正是坑因。
 - 统一 logo favicon.svg（四仓同 md5）；web_ui 新增文件需 `idf.py reconfigure`（PIT-026）。
+
+## 2026-09-06：ESPectre CSI 运动感知（家族推广，本板=仅感知可用 ⚠️）
+
+`components/espectre/`（v5.5.4 跨版本守卫已内建）+ `main/csi_motion.*`
+（Step 6a）。**无 OTA 例外流程**：停 ttyACM1 采集器 → `idf.py -p /dev/ttyACM1
+flash`（CH343 烧录前必停）→ 重启采集器。门开 +87.3KB（factory 槽余量大）。
+v5.5.4 构建/运行/校准 OK(thr=0.43)、2 次 MOTION——**但堆判决不过关**：
+free_heap 26.8KB、**min_heap=108B**（启动期距堆死 108 字节），推流并存崩
+（60s 6 断连，0.11fps）。无 PSRAM 板装不下"感知+推流"并存；除非砍功能换
+堆，否则保持门关。详见 PITFALLS PIT-034。
+
+**2026-09-08 政策反转（摄像头优先，PIT-038 补遗二）**：本板回退 CSI-off
+生产固件（USB 烧录）：`csi_motion` 位消失、capture 正常、free 42.5KB、
+:81 恢复服务。同日锤击护栏升级 v2（4 项每-IP 退避表，同 IP 接入 <5s →
+503 封顶 300s，正常观众 ~7s SPA 自愈重连不受影响）。试验结论定稿：
+无 PSRAM 板感知+推流互斥，生产形态=CSI 关。
