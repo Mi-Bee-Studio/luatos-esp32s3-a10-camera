@@ -324,6 +324,6 @@ See [docs/en/troubleshooting.md](docs/en/troubleshooting.md) for detailed soluti
 
 ## 📄 License
 
-Distributed under the **MIT License**. See [LICENSE](LICENSE) for more information.
+Distributed under **GPL-3.0-or-later**. See [LICENSE](LICENSE) for more information.
 
 Copyright © 2026 [Mi&Bee Studio](https://github.com/Mi-Bee-Studio)

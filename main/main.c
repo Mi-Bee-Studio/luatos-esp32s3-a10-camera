@@ -14,6 +14,7 @@
 
 #include "config_manager.h"
 #include "wifi_manager.h"
+#include "csi_motion.h"
 #include "camera_driver.h"
 #include "mjpeg_streamer.h"
 #include "web_server.h"
@@ -77,7 +78,15 @@ static void wifi_state_cb(wifi_state_t state, void *user_data)
         }
 
         /* Start MJPEG streamer (if not already started by camera reinit) */
+#if CONFIG_MIBEE_CSI_MOTION
+        /* CSI 感知模式不起 :81 流服务（PIT-038）：本板无 PSRAM，流与 CSI
+         * 本就不能并存（PIT-034 判决），起端口只会招致 NVR 类查看端 1-2s
+         * 重连风暴 → 空口/堆被打穿 → 连 Web UI/API 都死。端口关闭让查看端
+         * 秒收 RST，风暴止步。门控关（产品默认）时流照常。 */
+        ESP_LOGW(TAG, "MJPEG streamer skipped (CSI sensing mode, PIT-038)");
+#else
         mjpeg_streamer_start();
+#endif
 
         /* Start motion detection (only if heap is sufficient — motion detection
          * competes with MJPEG streaming for camera access and needs ~20KB for
@@ -278,6 +287,9 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
     ESP_LOGI(TAG, "[6/14] WiFi subsystem initialized");
 
+    /* Step 6a: ESPectre CSI motion sensing (optional, needs event loop) */
+    csi_motion_init();
+
     /* Register WiFi state callback */
     wifi_register_callback(wifi_state_cb, NULL);
 
@@ -352,7 +364,11 @@ void app_main(void)
         }
 
         /* Start MJPEG streamer (TCP server on port 81) */
+#if CONFIG_MIBEE_CSI_MOTION
+        ESP_LOGW(TAG, "MJPEG streamer skipped (CSI sensing mode, PIT-038)");
+#else
         mjpeg_streamer_start();
+#endif
 
 #ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
         /* Step 13.7: ONVIF conditional start (AP mode) */

@@ -75,3 +75,15 @@ CONFIG_MIBEECAM_ENABLE_FRAME_BROADCASTER=y
 CONFIG_MIBEECAM_ENABLE_BACKUP_SSID=y
 CONFIG_MIBEECAM_ENABLE_MDNS=y
 CONFIG_MIBEECAM_ENABLE_WIFI_SCAN=y
+# ESPectre CSI 运动感知（2026-09-06 家族推广，PIT-034）：栅格 pps 是链路预算，
+# 四仓统一 10（拥塞/弱链路下 admitted 才能过 70% 槽占用下限）。
+CONFIG_ESPECTRE_CSI_TARGET_PPS=10
+
+# PIT-038 Anti-stranding lwIP TCP tuning (tight-heap board): aborted transfer's dead
+# connection would pin the entire TCP_SND_BUF in the retransmission black hole (measured: one
+# mid-transfer death strands >10KB → heap drops to min 200B → send:113 storm).
+# 4×MSS send buffer cap + halved retransmission count, dead connections are torn down within ~1 minute,
+# throughput is sufficient for gzipped UI (17KB).
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=5760
+CONFIG_LWIP_TCP_MAXRTX=6
+CONFIG_LWIP_TCP_SYNMAXRTX=6

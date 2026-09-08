@@ -59,3 +59,22 @@ menu "MiBeeCam Features"
             via the git-ignored sdkconfig.
 
 endmenu
+
+menu "mibee-cam CSI Motion Sensing (ESPectre)"
+
+    config MIBEE_CSI_MOTION
+        bool "Enable ESPectre WiFi CSI motion sensing"
+        default n
+        select ESP_WIFI_CSI_ENABLED if SOC_WIFI_CSI_SUPPORT
+        help
+            Embed the ESPectre sensing runtime (components/espectre, GPLv3)
+            and start it after WiFi init. Logs motion-state changes only —
+            no API/contract surface yet (family pilot, 2026-09-06). Detection
+            profile / CSI cadence are tuned under "ESPectre Sensing".
+            With this option off the firmware is byte-identical to the
+            pre-ESPectre baseline (verified on seeed 2026-09-06).
+            WARNING: this board has NO PSRAM and ~40-47KB steady-state free
+            heap; the sensing runtime costs ~22KB internal RAM — measure
+            /metrics MemFree after enabling and watch the 15KB health line.
+
+endmenu
