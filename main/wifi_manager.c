@@ -10,6 +10,8 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include <string.h>
+#include <stdlib.h>
+#include "nvs.h"
 #include "event_bus.h"
 #ifdef CONFIG_MIBEECAM_ENABLE_MDNS
 #include "mdns.h"
@@ -41,9 +43,44 @@ static int s_retry_count = 0;
 #define RETRY_LOG_INTERVAL 10  // Log every N retries
 
 #ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
-static int s_active_ssid_index = 0;  // 0=primary, 1=backup
-static int s_primary_fail_count = 0; // consecutive failures on primary
-#define BACKUP_SSID_FAIL_THRESHOLD 3
+/* 双网络故障转移（2026-09-09 按 n16r8 配方移植，AT 契约 v1.2）：
+ * 连败快速切换（替代旧的 3 败切备用）+ 切换上限轮换（消灭"备用败→AP 死路"）
+ * + DHCP 盲区判切（关联后无 IP）+ 开机 RSSI 择优（≥8dB 规则 + NVS last_net 记忆）。 */
+static int  s_active_ssid_index    = 0;     // 0=primary, 1=backup
+static int  s_net_switches         = 0;     // 本轮开机的网络切换次数（防乒乓，连上即清零）
+static bool s_expected_disconnect  = false; // 自致断开（stop/force_reassoc）：不计连败不触发切网
+static esp_timer_handle_t s_dhcp_timer = NULL; // 盲区判定 12s 一次性定时器
+#define NET_FAILS_SWITCH  2      /* 当前网连续失败 N 次后切另一网（n16r8 同款） */
+#define NET_MAX_SWITCHES  6      /* 网络切换总次数上限，超过转 AP 兜底 */
+#define STA_MAX_RETRIES   3      /* 无处可切时的重试上限，超过转 AP（n16r8 同款） */
+#define DHCP_TIMEOUT_MS   12000  /* 关联后无 IP 判 DHCP 盲区（ai 教训，n16r8 配方） */
+
+static bool secondary_configured(void)
+{
+    const cam_config_t *cfg = config_get();
+    return cfg->wifi_ssid_2[0] != '\0' && cfg->wifi_pass_2[0] != '\0';
+}
+
+static void save_last_net(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("wifi_pref", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, "last_net", s_active_ssid_index ? 1 : 0);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static bool load_last_net(void)
+{
+    nvs_handle_t h;
+    uint8_t v = 0;
+    if (nvs_open("wifi_pref", NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u8(h, "last_net", &v);
+        nvs_close(h);
+    }
+    return v == 1;
+}
 #endif
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data);
@@ -51,6 +88,10 @@ static void notify_state(wifi_state_t new_state);
 static void wifi_retry_timer_callback(void *arg);
 static void wifi_state_event_handler(void *arg, esp_event_base_t event_base,
                                      int32_t event_id, void *event_data);
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+static bool failover_to_other_net(const char *why);
+static void dhcp_blind_timer_cb(void *arg);
+#endif
 // --- Helper ---
 static void set_state(wifi_state_t new_state)
 {
@@ -95,11 +136,11 @@ static void notify_state(wifi_state_t new_state)
 }
 
 // --- Infinite retry (no AP fallback) ---
-static void wifi_schedule_retry(void)
+static void wifi_schedule_retry(uint32_t delay_s)
 {
     ESP_LOGI(TAG, "STA retry scheduled (%d attempts, retrying indefinitely)", s_retry_count);
     set_state(WIFI_STATE_STA_DISCONNECTED);
-    esp_timer_start_once(s_retry_timer, RETRY_DELAY_S * 1000000);
+    esp_timer_start_once(s_retry_timer, (uint64_t)delay_s * 1000000ULL);
 }
 
 // --- Event handler ---
@@ -117,41 +158,42 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         case WIFI_EVENT_STA_CONNECTED:
             ESP_LOGI(TAG, "STA connected to AP, waiting for IP...");
             set_state(WIFI_STATE_STA_CONNECTING);
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+            /* 关联成功起 12s 盲区窗：超时未拿到 IP = DHCP 盲区（主网弱态
+             * 典型症状），到期由 dhcp_blind_timer_cb 直接切网。 */
+            if (s_dhcp_timer && !esp_timer_is_active(s_dhcp_timer)) {
+                esp_timer_start_once(s_dhcp_timer, DHCP_TIMEOUT_MS * 1000ULL);
+            }
+#endif
             break;
 
         case WIFI_EVENT_STA_DISCONNECTED: {
             wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)event_data;
-            s_retry_count++;
 #ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
-            // Backup SSID fallback logic
-            const cam_config_t *cfg = config_get();
-            if (cfg->wifi_ssid_2[0] != '\0') {
-                if (s_active_ssid_index == 0) {
-                    // Currently on primary — check fail count
-                    s_primary_fail_count++;
-                    if (s_primary_fail_count >= BACKUP_SSID_FAIL_THRESHOLD) {
-                        ESP_LOGW(TAG, "Primary SSID failed %d times, switching to backup: %s",
-                                 s_primary_fail_count, cfg->wifi_ssid_2);
-                        s_active_ssid_index = 1;
-                        s_retry_count = 0;
-                        event_t event = {
-                            .type = EVENT_WIFI_SWITCHED_SSID,
-                            .timestamp = esp_timer_get_time(),
-                            .payload = NULL,
-                            .payload_len = 0,
-                        };
-                        event_bus_publish(&event);
-                        wifi_start_sta(cfg->wifi_ssid_2, cfg->wifi_pass_2);
-                        break;  // Skip normal retry — wifi_start_sta already called
-                    }
-                } else {
-                    // Currently on backup — if backup also fails, fall to AP
-                    if (s_retry_count > BACKUP_SSID_FAIL_THRESHOLD * 2) {
-                        ESP_LOGW(TAG, "Backup SSID also failed, falling back to AP mode");
-                        wifi_start_ap();
-                        break;
-                    }
-                }
+            if (s_dhcp_timer && esp_timer_is_active(s_dhcp_timer)) {
+                esp_timer_stop(s_dhcp_timer);   /* 关联已消失，盲区窗作废 */
+            }
+            if (s_expected_disconnect) {
+                /* 自致断开（wifi_start_sta 的 stop / force_reassoc）：
+                 * 不计连败、不触发切网；重连由发起方自行调度。 */
+                s_expected_disconnect = false;
+                ESP_LOGI(TAG, "expected disconnect (self-initiated) — not counting");
+                break;
+            }
+#endif
+            s_retry_count++;
+
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+            /* 连败快速切换：当前网 2 败先切另一网（n16r8 配方），再谈重试/AP。
+             * 旧的"主网 3 败→备用，备用 >6 → AP 死路"已被替代。 */
+            if (s_retry_count >= NET_FAILS_SWITCH &&
+                failover_to_other_net("connect failures")) {
+                break;
+            }
+            if (s_retry_count >= STA_MAX_RETRIES) {
+                ESP_LOGW(TAG, "STA max retries reached (nowhere to switch) — AP fallback");
+                wifi_start_ap();
+                break;
             }
 #endif
             // Log every RETRY_LOG_INTERVAL attempts, or first few
@@ -160,7 +202,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                          disconn->reason, disconn->reason, s_retry_count);
             }
             // Don't clear AP list — let ESP-IDF cache scan results for faster reconnect
-            wifi_schedule_retry();
+            wifi_schedule_retry(RETRY_DELAY_S);
             break;
         }
 
@@ -191,7 +233,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             ESP_LOGI(TAG, "STA got IP: %s", s_ip_str);
             s_retry_count = 0;
 #ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
-            s_primary_fail_count = 0;
+            s_net_switches = 0;     /* 连上即清零：允许下次掉线再转移（n16r8 同款） */
+            if (s_dhcp_timer && esp_timer_is_active(s_dhcp_timer)) {
+                esp_timer_stop(s_dhcp_timer);
+            }
+            save_last_net();        /* 上次拿到 IP 的网络，下次开机优先 */
             // Note: s_active_ssid_index stays as-is (successfully connected)
 #endif
             set_state(WIFI_STATE_STA_CONNECTED);
@@ -207,6 +253,55 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 }
 
 // --- Public API ---
+
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+/* 切到另一张网（有配置且未达上限才切）；返回 true = 已发起切换。
+ * n16r8 配方：连上即清零 s_net_switches，上限只在"两网都连不上"的
+ * 循环里触顶 → 调用方转 AP 兜底。 */
+static bool failover_to_other_net(const char *why)
+{
+    if (s_net_switches >= NET_MAX_SWITCHES) {
+        ESP_LOGW(TAG, "net switch cap reached (%d) — leaving to caller", s_net_switches);
+        return false;
+    }
+    int target = s_active_ssid_index ^ 1;
+    if (target == 1 && !secondary_configured()) {
+        return false;   /* nowhere to go */
+    }
+    s_net_switches++;
+    s_retry_count = 0;
+    ESP_LOGW(TAG, "%s — switching to %s network (switch %d/%d)",
+             why, target ? "backup" : "primary", s_net_switches, NET_MAX_SWITCHES);
+    event_t event = {
+        .type = EVENT_WIFI_SWITCHED_SSID,
+        .timestamp = esp_timer_get_time(),
+        .payload = NULL,
+        .payload_len = 0,
+    };
+    event_bus_publish(&event);
+    const cam_config_t *cfg = config_get();
+    if (target == 1) {
+        wifi_start_sta(cfg->wifi_ssid_2, cfg->wifi_pass_2);
+    } else {
+        wifi_start_sta(cfg->wifi_ssid, cfg->wifi_pass);
+    }
+    return true;
+}
+
+/* DHCP 盲区判定：关联后 12s 无 IP。主网"弱而不断"时纯连败转移永远
+ * 不会触发，必须在这里直接切网而不是干等（ai 教训，n16r8 配方）。 */
+static void dhcp_blind_timer_cb(void *arg)
+{
+    if (wifi_get_state() == WIFI_STATE_STA_CONNECTED) {
+        return;   /* 拿到 IP 与到期竞态（GOT_IP 已 stop，这里双保险） */
+    }
+    ESP_LOGW(TAG, "associated but no IP in %dms (DHCP blind spot)", DHCP_TIMEOUT_MS);
+    if (!failover_to_other_net("no IP (DHCP blind spot)")) {
+        wifi_start_ap();
+    }
+}
+#endif
+
 
 esp_err_t wifi_init(void)
 {
@@ -283,6 +378,18 @@ esp_err_t wifi_init(void)
         ESP_LOGE(TAG, "Failed to create WiFi retry timer: %s", esp_err_to_name(ret));
         return ret;
     }
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+    /* DHCP 盲区窗（关联后 12s 无 IP → 切网，n16r8 配方） */
+    esp_timer_create_args_t dhcp_args = {
+        .callback = dhcp_blind_timer_cb,
+        .name = "wifi_dhcp_blind"
+    };
+    ret = esp_timer_create(&dhcp_args, &s_dhcp_timer);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create DHCP blind timer: %s", esp_err_to_name(ret));
+        s_dhcp_timer = NULL;   /* 盲区判定缺席不致命：连败转移仍在 */
+    }
+#endif
     s_state = WIFI_STATE_AP;
     s_retry_count = 0;
     memset(s_ip_str, 0, sizeof(s_ip_str));
@@ -295,6 +402,13 @@ esp_err_t wifi_init(void)
 esp_err_t wifi_start_ap(void)
 {
     esp_err_t ret;
+
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+    if (s_dhcp_timer && esp_timer_is_active(s_dhcp_timer)) {
+        esp_timer_stop(s_dhcp_timer);   /* 转 AP：盲区窗作废 */
+    }
+    s_expected_disconnect = true;       /* 自家 esp_wifi_stop() 的断开事件不计连败 */
+#endif
 
     wifi_config_t wifi_config = {
         .ap = {
@@ -334,34 +448,15 @@ esp_err_t wifi_start_ap(void)
     return ESP_OK;
 }
 
-esp_err_t wifi_start_sta(const char *ssid, const char *pass)
+/* STA 无线电腾起（停栈→STA 模式→主机名→起栈→PS/HT20/TX 本板癖好）。
+ * 不含凭据与连接——供 wifi_start_sta / wifi_start_sta_boot 共用
+ * （后者需在连接前做开机择优扫描）。 */
+static esp_err_t sta_radio_up(void)
 {
-    if (!ssid || !pass) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
 #ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
-    // Track which SSID index we're connecting to
-    const cam_config_t *cfg = config_get();
-    if (strcmp(ssid, cfg->wifi_ssid) == 0) {
-        s_active_ssid_index = 0;
-        s_primary_fail_count = 0;
-    } else if (strcmp(ssid, cfg->wifi_ssid_2) == 0) {
-        s_active_ssid_index = 1;
-    }
+    s_expected_disconnect = true;   /* 自家 esp_wifi_stop() 的断开事件不计连败 */
 #endif
-
-    esp_err_t ret;
-
-    wifi_config_t wifi_config = {0};  // zero-init ALL fields
-    strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;  // auto-negotiate any auth mode
-    wifi_config.sta.pmf_cfg.capable = true;
-    wifi_config.sta.pmf_cfg.required = false;
-    wifi_config.sta.listen_interval = 3;  // lower = better multicast, less likely rejected
-
-    ret = esp_wifi_stop();
+    esp_err_t ret = esp_wifi_stop();
     if (ret != ESP_OK && ret != ESP_ERR_WIFI_NOT_STARTED) {
         ESP_LOGW(TAG, "esp_wifi_stop: %s", esp_err_to_name(ret));
     }
@@ -372,11 +467,6 @@ esp_err_t wifi_start_sta(const char *ssid, const char *pass)
         return ret;
     }
 
-    ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set STA config: %s", esp_err_to_name(ret));
-        return ret;
-    }
     /* Set DHCP hostname so router shows device name instead of "espressif" */
     const char *dev_name = config_get()->device_name;
     if (dev_name && dev_name[0]) {
@@ -413,6 +503,34 @@ esp_err_t wifi_start_sta(const char *ssid, const char *pass)
             ESP_LOGW(TAG, "Failed to set WiFi TX power: %s", esp_err_to_name(pwr_err));
         }
     }
+    return ESP_OK;
+}
+
+/* 应用凭据并发起连接（含主/备槽号记账）。 */
+static void sta_apply_connect(const char *ssid, const char *pass)
+{
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+    const cam_config_t *cfg = config_get();
+    if (strcmp(ssid, cfg->wifi_ssid) == 0) {
+        s_active_ssid_index = 0;
+    } else if (strcmp(ssid, cfg->wifi_ssid_2) == 0) {
+        s_active_ssid_index = 1;
+    }
+#endif
+
+    wifi_config_t wifi_config = {0};  // zero-init ALL fields
+    strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
+    strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;  // auto-negotiate any auth mode
+    wifi_config.sta.pmf_cfg.capable = true;
+    wifi_config.sta.pmf_cfg.required = false;
+    wifi_config.sta.listen_interval = 3;  // lower = better multicast, less likely rejected
+
+    esp_err_t ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set STA config: %s", esp_err_to_name(ret));
+        return;
+    }
 
     esp_wifi_connect();
 
@@ -420,9 +538,80 @@ esp_err_t wifi_start_sta(const char *ssid, const char *pass)
     memset(s_ip_str, 0, sizeof(s_ip_str));
     strcpy(s_ip_str, "0.0.0.0");
 
-    ESP_LOGI(TAG, "STA starting, connecting to %s", ssid);
+    ESP_LOGI(TAG, "STA connecting to %s", ssid);
+}
+
+esp_err_t wifi_start_sta(const char *ssid, const char *pass)
+{
+    if (!ssid || !pass) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t ret = sta_radio_up();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    sta_apply_connect(ssid, pass);
     return ESP_OK;
 }
+
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+/* 开机入口（main.c Step 8）：上次拿到 IP 的网络为默认（NVS wifi_pref/
+ * last_net），双网异名时快扫一次比 RSSI——≥8dB 者胜出，平局/双缺保持
+ * last_net，主网不可见而备网在 → 备网（n16r8 wifi_manager 同款判据）。
+ * 扫描 ~1-2s 仅开机一次，在 app_main 上下文阻塞可接受。 */
+esp_err_t wifi_start_sta_boot(void)
+{
+    const cam_config_t *cfg = config_get();
+    if (!cfg->wifi_ssid[0] || !cfg->wifi_pass[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    s_active_ssid_index = (load_last_net() && secondary_configured()) ? 1 : 0;
+
+    esp_err_t ret = sta_radio_up();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    if (secondary_configured() && strcmp(cfg->wifi_ssid, cfg->wifi_ssid_2) != 0) {
+        wifi_scan_config_t sc = { 0 };
+        sc.show_hidden = false;
+        if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
+            uint16_t n = 0;
+            esp_wifi_scan_get_ap_num(&n);
+            wifi_ap_record_t *recs = malloc(sizeof(wifi_ap_record_t) * (n ? n : 1));
+            if (recs && esp_wifi_scan_get_ap_records(&n, recs) == ESP_OK) {
+                int8_t r1 = -128, r2 = -128;
+                for (uint16_t i = 0; i < n; i++) {
+                    if (strcmp((const char *)recs[i].ssid, cfg->wifi_ssid) == 0 && recs[i].rssi > r1) r1 = recs[i].rssi;
+                    if (strcmp((const char *)recs[i].ssid, cfg->wifi_ssid_2) == 0 && recs[i].rssi > r2) r2 = recs[i].rssi;
+                }
+                int want = s_active_ssid_index;
+                if (r1 > -128 && r2 > -128) {
+                    if (r2 - r1 >= 8)      want = 1;
+                    else if (r1 - r2 >= 8) want = 0;
+                    ESP_LOGI(TAG, "boot pick: '%s' %ddBm vs '%s' %ddBm → %s",
+                             cfg->wifi_ssid, r1, cfg->wifi_ssid_2, r2,
+                             want ? "backup" : "primary");
+                } else if (r2 > -128 && r1 == -128) {
+                    want = 1;   /* 主网不在空中 */
+                    ESP_LOGI(TAG, "boot pick: primary not on air, backup %ddBm → backup", r2);
+                }
+                s_active_ssid_index = want;
+            } else {
+                ESP_LOGW(TAG, "boot pick: scan records unavailable — using last_net");
+            }
+            free(recs);
+        } else {
+            ESP_LOGW(TAG, "boot pick: scan failed — using last_net");
+        }
+    }
+
+    sta_apply_connect(s_active_ssid_index ? cfg->wifi_ssid_2 : cfg->wifi_ssid,
+                      s_active_ssid_index ? cfg->wifi_pass_2 : cfg->wifi_pass);
+    return ESP_OK;
+}
+#endif
 
 wifi_state_t wifi_get_state(void)
 {
@@ -446,11 +635,15 @@ int wifi_get_current_ssid_index(void)
 
 void wifi_manager_force_reassoc(void)
 {
-    /* 只断开、不重配：disconnect 事件处理器按既有节奏自动重连
-     * （RETRY_DELAY_S 后 esp_wifi_connect；主网连败 3 次切备用网）。
-     * 成功重连即清零失败计数，故单次强制重联不会误触发切网。 */
+    /* 只断开、不重配：PIT-040 塌方自愈用。断开事件被 s_expected_disconnect
+     * 旗标吸收（不计连败、不触发切网），1s 后快速回连同网；若重连不上，
+     * 后续断开事件恢复正常计败，2 败自动切另一网。 */
     ESP_LOGW(TAG, "forcing STA re-association (link collapse recovery)");
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+    s_expected_disconnect = true;
+#endif
     esp_wifi_disconnect();
+    wifi_schedule_retry(1);
 }
 
 esp_err_t wifi_register_callback(wifi_state_callback_t cb, void *user_data)
