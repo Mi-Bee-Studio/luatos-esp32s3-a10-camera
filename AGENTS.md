@@ -106,7 +106,7 @@ To disable a feature: set `=n` in `sdkconfig.defaults`, delete `sdkconfig`, rebu
 - **WPA3 fully disabled** (SAE auth issues on this board): WPA3_SAE, SAE_PK, SAE_H2E, SOFTAP_SAE, WPA3_OWE all off.
 - **AMPDU TX/RX 已关闭(2026-09-09 定案,PIT-039 家族配方)**:2026-09-03 曾重开
   (seeed 配方、ch2 -59dBm 复验通过),但 2026-09-09 判别实验实锤:AMPDU 开启时
-  本板呈分钟级 TX 楔死(ping/TCP 同死、20 请求 8/20,换网 GT3000 1 米依旧),
+  本板呈分钟级 TX 楔死(ping/TCP 同死、20 请求 8/20,换网 GT 系主节点 1 米依旧),
   关闭后 **20/20 零失败、NVR 流会话 16-30s → 2min+、失聪计数零触发**——就是
   历史上"驱动 stall"的真身。勿再以吞吐为由重开,除非重做判别实验。
 - **STA 强制 HT20**（`wifi_start_sta` 里 `esp_wifi_set_bandwidth`）：本板曾与 HT40 AP
