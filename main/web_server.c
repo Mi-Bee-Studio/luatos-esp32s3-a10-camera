@@ -28,6 +28,7 @@
 #include "wifi_manager.h"
 #include "camera_driver.h"
 #include "mjpeg_streamer.h"
+#include "csi_motion.h"  /* 契约 v1.6：/api/status 的 csi 快照字段（本板 CSI-off 恒缺省） */
 #include "motion_detect.h"
 #include "lwip/sockets.h"  /* setsockopt / TCP_NODELAY in on_session_open */
 #include "event_bus.h"
@@ -341,6 +342,20 @@ static esp_err_t handler_api_status(httpd_req_t *req)
 
     cJSON_AddNumberToObject(data, "stream_clients", mjpeg_streamer_get_client_count());
     cJSON_AddNumberToObject(data, "stream_clients_max", 1);  /* 2026-09-03: 硬单流（DRAM 限制），与 mjpeg_streamer MAX_STREAM_CLIENTS 同步改 */
+
+    /* CSI 实时快照（契约 v1.6，与 /ws csi_status 心跳同形）。本板为 CSI-off
+     * 生产形态（PIT-038 补遗二），stub 恒 false → 字段缺省；源码保持四仓
+     * 对齐，未来重开 CSI 无需改此处 */
+    csi_motion_status_t csi;
+    if (csi_motion_get_status(&csi)) {
+        cJSON *csi_obj = cJSON_CreateObject();
+        if (csi_obj) {
+            cJSON_AddStringToObject(csi_obj, "state", csi.state);
+            cJSON_AddNumberToObject(csi_obj, "score", (double)csi.score);
+            cJSON_AddNumberToObject(csi_obj, "thr", (double)csi.thr);
+            cJSON_AddItemToObject(data, "csi", csi_obj);
+        }
+    }
 
     return json_ok(req, data);
 }
@@ -700,7 +715,7 @@ static esp_err_t handler_capabilities(httpd_req_t *req)
     }
 
     /* 契约 v1.0：12 个布尔能力位 + api_version/wifi_scan（见 docs/api-contract.md） */
-    cJSON_AddStringToObject(data, "api_version", "1.5");
+    cJSON_AddStringToObject(data, "api_version", "1.6");
 #ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
     cJSON_AddBoolToObject(data, "wifi_scan", true);
 #else

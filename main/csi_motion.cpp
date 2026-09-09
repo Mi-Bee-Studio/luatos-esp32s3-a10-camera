@@ -182,4 +182,12 @@ esp_err_t csi_motion_init(void)
     return ESP_OK;
 }
 
+bool csi_motion_get_status(csi_motion_status_t *out)
+{
+    /* CSI-off 生产形态（PIT-038 补遗二）：无感知数据，恒无快照 ——
+     * /api/status 的 "csi" 字段缺省（契约 v1.6） */
+    (void)out;
+    return false;
+}
+
 #endif /* CONFIG_MIBEE_CSI_MOTION */

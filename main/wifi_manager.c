@@ -444,6 +444,15 @@ int wifi_get_current_ssid_index(void)
 }
 #endif
 
+void wifi_manager_force_reassoc(void)
+{
+    /* 只断开、不重配：disconnect 事件处理器按既有节奏自动重连
+     * （RETRY_DELAY_S 后 esp_wifi_connect；主网连败 3 次切备用网）。
+     * 成功重连即清零失败计数，故单次强制重联不会误触发切网。 */
+    ESP_LOGW(TAG, "forcing STA re-association (link collapse recovery)");
+    esp_wifi_disconnect();
+}
+
 esp_err_t wifi_register_callback(wifi_state_callback_t cb, void *user_data)
 {
     s_callback = cb;

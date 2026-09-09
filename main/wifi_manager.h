@@ -115,4 +115,11 @@ esp_err_t wifi_stop_mdns(void);
  */
 int wifi_get_current_ssid_index(void);
 #endif
+
+/**
+ * @brief Force a STA re-association (link-collapse recovery, health_monitor 用).
+ *        主动断开当前关联；disconnect 事件走既有自动重连路径（10s 重试，
+ *        主网连败 3 次自动切备用网）。比重启整机便宜两个数量级。
+ */
+void wifi_manager_force_reassoc(void);
 #endif // WIFI_MANAGER_H
