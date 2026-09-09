@@ -121,6 +121,22 @@ To disable a feature: set `=n` in `sdkconfig.defaults`, delete `sdkconfig`, rebu
 
 With PSRAM off and only one DRAM framebuffer, motion detection and streaming contend for the same frame. Code uses a **sample-and-release pattern** in `frame_broadcaster` + pause-during-stream in motion detect to avoid contention. Raising `fb_count` requires PSRAM, which is disabled — don't try.
 
+## Dual WiFi（2026-09-09，n16r8 配方移植，契约 AT v1.2）
+
+- **开机**：`wifi_start_sta_boot()`（main Step 8）——NVS `wifi_pref/last_net` 记忆为默认，
+  双网异名时独立扫描会话比 RSSI（≥8dB 换网/平局保持/主网不在空中→备网）。
+  扫描会话只起栈→扫→停，连接走原版 `wifi_start_sta`（config 在 start 前，勿改序）。
+- **连败切换**：当前网 2 败（NET_FAILS_SWITCH）切另一网，总次数上限 6
+  （NET_MAX_SWITCHES，连上即清零）后转 AP；替代旧"3 败切备用、备用败→AP 死路"。
+- **DHCP 盲区**：关联后 12s 无 IP → 定时器只做 `esp_wifi_disconnect()`，
+  切换由事件路径计败驱动——**勿在 esp_timer 回调里调 wifi_start_sta/esp_wifi_stop**
+  （小栈 + wifi 任务互锁，2026-09-09 楔死实录）。
+- **sta.scan_method=ALL_CHANNEL_SCAN**：切换风暴后 FAST 扫描缓存过期 → connect 201。
+- **AT+WIFI2**（at_port.c 扩展）：查询脱敏/net 行；`=ssid,pass` 写入、空 ssid 清除；
+  **本板语义=保存即生效不重启**（契约 §6 v1.2）。
+- **自致断开**：`s_expected_disconnect` 旗标 + reason==8 双判据（悬空旗标会吞真实掉线）。
+- 当前生产槽位：primary=GT3000（1 米）/ backup=GT（隔墙），两网同密码。
+
 ## Factory reset
 
 Hold **BOOT** (GPIO 0) for 5 s → clears NVS, reboots into AP mode. (On `ai-thinker-esp32-cam`, GPIO0 is camera XCLK and unusable — different board, different choice.)
