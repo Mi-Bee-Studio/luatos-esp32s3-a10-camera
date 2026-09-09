@@ -60,11 +60,11 @@ CONFIG_LWIP_TCP_MSL=15000
 # CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA is not set
 
 # WiFi - AMPDU TX/RX disabled 2026-09-09: family weak-link default (PIT-039
-# lesson ①, n16r8/ai recipe). 2026-09-09 判别实验：切到 1 米外 GT3000（ch7，
+# lesson ①, n16r8/ai recipe). 2026-09-09 判别实验：切到 1 米外 GT 系主节点（ch7，
 # n16r8 同位置完美）失聪依旧（20 请求 8/20 与 GT 网完全同款，ping 与 TCP
 # 同生共死）→ 网络侧无罪，板侧 TX 楔死。luatos 历史上 AMPDU 开启正是
 # "驱动 stall" 的嫌疑源（2026-09-03 曾为绕 stall 关过，后因 HT40/-70dBm
-# 弱信号下关 AMPDU 链路崩塌而重开）。现在驻留 GT3000 -57dBm HT20 强链，
+# 弱信号下关 AMPDU 链路崩塌而重开）。现在驻留 GT 系主节点 -57dBm HT20 强链，
 # 按 PIT-039 配方关闭验证。若关闭后失聪消失即定案；若需吞吐可再评估。
 # CONFIG_ESP_WIFI_AMPDU_TX_ENABLED is not set
 # CONFIG_ESP_WIFI_AMPDU_RX_ENABLED is not set

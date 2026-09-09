@@ -106,7 +106,7 @@ To disable a feature: set `=n` in `sdkconfig.defaults`, delete `sdkconfig`, rebu
 - **WPA3 fully disabled** (SAE auth issues on this board): WPA3_SAE, SAE_PK, SAE_H2E, SOFTAP_SAE, WPA3_OWE all off.
 - **AMPDU TX/RX 已关闭(2026-09-09 定案,PIT-039 家族配方)**:2026-09-03 曾重开
   (seeed 配方、ch2 -59dBm 复验通过),但 2026-09-09 判别实验实锤:AMPDU 开启时
-  本板呈分钟级 TX 楔死(ping/TCP 同死、20 请求 8/20,换网 GT3000 1 米依旧),
+  本板呈分钟级 TX 楔死(ping/TCP 同死、20 请求 8/20,换网 GT 系主节点 1 米依旧),
   关闭后 **20/20 零失败、NVR 流会话 16-30s → 2min+、失聪计数零触发**——就是
   历史上"驱动 stall"的真身。勿再以吞吐为由重开,除非重做判别实验。
 - **STA 强制 HT20**（`wifi_start_sta` 里 `esp_wifi_set_bandwidth`）：本板曾与 HT40 AP
@@ -135,7 +135,7 @@ With PSRAM off and only one DRAM framebuffer, motion detection and streaming con
 - **AT+WIFI2**（at_port.c 扩展）：查询脱敏/net 行；`=ssid,pass` 写入、空 ssid 清除；
   **本板语义=保存即生效不重启**（契约 §6 v1.2）。
 - **自致断开**：`s_expected_disconnect` 旗标 + reason==8 双判据（悬空旗标会吞真实掉线）。
-- 当前生产槽位：primary=GT3000（1 米）/ backup=GT（隔墙），两网同密码。
+- 当前生产槽位：primary=GT 系主节点（1 米）/ backup=GT 系副节点（隔墙），两网同密码。
 
 ## Factory reset
 
