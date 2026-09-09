@@ -57,6 +57,15 @@ typedef struct {
     /* 板级扩展（契约 §7 登记；server_url 自契约起为可选字段）*/
     char     server_url[129];            /* 遗留上传目标，可空 */
     char     mdns_hostname[33];          /* 默认 "mibee" */
+    /* CSI 感知调参键族（契约 v1.7 §3.2，csi_motion.h 配套接口）。本板为
+     * CSI-off 生产形态（CONFIG_MIBEE_CSI_MOTION=n）：接受存储但运行时
+     * 无效果——apply/setter 走 stub 空操作，capabilities 不出 csi_motion 位 */
+    uint8_t  csi_enabled;                /* 0/1，默认 1；0=暂停采样与事件 */
+    float    csi_threshold;              /* 0.0=自动（校准+settle）；0.05-1.0=手动锁定并禁用 settle（PIT-041） */
+    uint8_t  csi_on_hits;                /* 去抖：连续超阈 N 次判 MOTION（1-20，默认 4） */
+    uint8_t  csi_off_hits;               /* 去抖：连续低于 N 次判 IDLE（1-20，默认 3） */
+    uint8_t  csi_profile;                /* 检测档：0=Lightweight 1=High-Accuracy（默认 0） */
+    uint8_t  csi_auto_heal;              /* 自愈环（默认 1）：thr 崩塌/翻转风暴→重校准→二次退化锁定阈值 */
 } cam_config_t;
 
 /**

@@ -165,6 +165,7 @@ static esp_err_t json_error(httpd_req_t *req, const char *msg, int status)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_status(req, (status == HTTPD_401_UNAUTHORIZED) ? "401 Unauthorized" :
                            (status == HTTPD_404_NOT_FOUND) ? "404 Not Found" :
+                           (status == 503) ? "503 Service Unavailable" :  /* 契约 v1.7 /api/csi/calibrate */
                            (status == HTTPD_500_INTERNAL_SERVER_ERROR) ? "500 Internal Server Error" :
                            "400 Bad Request");
     httpd_resp_send(req, json, strlen(json));
@@ -384,6 +385,13 @@ static esp_err_t handler_api_config_get(httpd_req_t *req)
     cJSON_AddNumberToObject(data, "cam_hmirror", (double)cfg->cam_hmirror);
     cJSON_AddNumberToObject(data, "xclk_freq_mhz", (double)cfg->xclk_freq_mhz);
     cJSON_AddNumberToObject(data, "onvif_enable", (double)cfg->onvif_enable);
+    /* CSI 调参键族（契约 v1.7；本板 CSI-off 生产形态，仅存储回显） */
+    cJSON_AddNumberToObject(data, "csi_enabled", (double)cfg->csi_enabled);
+    cJSON_AddNumberToObject(data, "csi_threshold", (double)cfg->csi_threshold);
+    cJSON_AddNumberToObject(data, "csi_on_hits", (double)cfg->csi_on_hits);
+    cJSON_AddNumberToObject(data, "csi_off_hits", (double)cfg->csi_off_hits);
+    cJSON_AddNumberToObject(data, "csi_profile", (double)cfg->csi_profile);
+    cJSON_AddNumberToObject(data, "csi_auto_heal", (double)cfg->csi_auto_heal);
     /* motion 家族超集（契约 §3.2）*/
     cJSON_AddNumberToObject(data, "motion_enabled", (double)cfg->motion_enabled);
     cJSON_AddNumberToObject(data, "motion_sensitivity", (double)cfg->motion_sensitivity);
@@ -448,6 +456,7 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
     uint8_t old_vflip = old_cfg->cam_vflip;
     uint8_t old_hmirror = old_cfg->cam_hmirror;
     uint8_t old_xclk = old_cfg->xclk_freq_mhz;
+    const float prev_csi_threshold = old_cfg->csi_threshold;  /* 契约 v1.7：显式改 0=恢复自动 */
     char old_wifi_ssid[33];
     char old_wifi_pass[65];
     strncpy(old_wifi_ssid, old_cfg->wifi_ssid, sizeof(old_wifi_ssid) - 1);
@@ -601,6 +610,55 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
         }
         new_cfg.onvif_enable = (uint8_t)val;
     }
+    /* CSI 调参键族（契约 v1.7；本板 CSI-off 生产形态：接受存储，运行时无效果） */
+    bool csi_changed = false;
+    if ((item = cJSON_GetObjectItem(root, "csi_enabled")) && cJSON_IsNumber(item)) {
+        new_cfg.csi_enabled = (uint8_t)((int)item->valuedouble != 0);
+        csi_changed = true;
+    }
+    if ((item = cJSON_GetObjectItem(root, "csi_threshold")) && cJSON_IsNumber(item)) {
+        double val = item->valuedouble;
+        if (val != 0.0 && (val < 0.05 || val > 1.0)) {
+            cJSON_Delete(root);
+            return json_error(req, "csi_threshold must be 0 (auto) or 0.05-1.0",
+                              HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.csi_threshold = (float)val;
+        csi_changed = true;
+    }
+    if (cJSON_GetObjectItem(root, "csi_on_hits") || cJSON_GetObjectItem(root, "csi_off_hits")) {
+        cJSON *on_item = cJSON_GetObjectItem(root, "csi_on_hits");
+        cJSON *off_item = cJSON_GetObjectItem(root, "csi_off_hits");
+        if ((on_item && !cJSON_IsNumber(on_item)) || (off_item && !cJSON_IsNumber(off_item))) {
+            cJSON_Delete(root);
+            return json_error(req, "csi_on_hits/csi_off_hits must be numbers",
+                              HTTPD_400_BAD_REQUEST);
+        }
+        int on = on_item ? (int)on_item->valuedouble : new_cfg.csi_on_hits;
+        int off = off_item ? (int)off_item->valuedouble : new_cfg.csi_off_hits;
+        if (on < 1 || on > 20 || off < 1 || off > 20) {
+            cJSON_Delete(root);
+            return json_error(req, "csi_on_hits/csi_off_hits out of range (1-20)",
+                              HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.csi_on_hits = (uint8_t)on;
+        new_cfg.csi_off_hits = (uint8_t)off;
+        csi_changed = true;
+    }
+    if ((item = cJSON_GetObjectItem(root, "csi_profile")) && cJSON_IsNumber(item)) {
+        int val = (int)item->valuedouble;
+        if (val != 0 && val != 1) {
+            cJSON_Delete(root);
+            return json_error(req, "csi_profile must be 0 (lightweight) or 1 (high-accuracy)",
+                              HTTPD_400_BAD_REQUEST);
+        }
+        new_cfg.csi_profile = (uint8_t)val;
+        csi_changed = true;
+    }
+    if ((item = cJSON_GetObjectItem(root, "csi_auto_heal")) && cJSON_IsNumber(item)) {
+        new_cfg.csi_auto_heal = (uint8_t)((int)item->valuedouble != 0);
+        /* auto_heal 不进 csi_changed：感知环直读 config，无需 apply（同 seeed） */
+    }
     if ((item = cJSON_GetObjectItem(root, "ws_enable")) && cJSON_IsNumber(item)) {
         int val = (int)item->valuedouble;
         if (val != 0 && val != 1) {
@@ -629,6 +687,16 @@ static esp_err_t handler_api_config_post(httpd_req_t *req)
     esp_err_t err = config_save(&new_cfg);
     if (err != ESP_OK) {
         return json_error(req, "Failed to save config", HTTPD_500_INTERNAL_SERVER_ERROR);
+    }
+
+    /* CSI 键族热应用（契约 v1.7；本板 CSI-off 时 setter/apply 全为 stub
+     * 空操作，热应用路径零副作用）。csi_threshold 显式改 0 = 恢复自动
+     * （重校准 + 重新启用 settle），须先于 apply_config 单独触发 */
+    if (csi_changed) {
+        if (new_cfg.csi_threshold == 0.0f && prev_csi_threshold > 0.0f) {
+            csi_motion_set_threshold(0.0f);
+        }
+        csi_motion_apply_config();
     }
 
     /* --- Camera settings: save + reboot to apply --- */
@@ -704,6 +772,34 @@ static esp_err_t handler_reboot(httpd_req_t *req)
 }
 
 /* ------------------------------------------------------------------ */
+/*  POST /api/csi/calibrate  (CSI 立即重校准, 契约 v1.7)               */
+/* ------------------------------------------------------------------ */
+
+/** 触发 CSI 重校准（write auth，背景执行，进度经 csi.calibrating / 串口
+ *  观察）。本板 CSI-off 生产形态（stub 恒 ESP_ERR_NOT_SUPPORTED）→ 404；
+ *  运行时未就绪（无 WiFi 链路等）→ 503。 */
+static esp_err_t handler_csi_calibrate(httpd_req_t *req)
+{
+    esp_err_t ret = require_auth(req);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    esp_err_t csi_ret = csi_motion_recalibrate();
+    if (csi_ret == ESP_ERR_NOT_SUPPORTED) {
+        return json_error(req, "CSI sensing not built (csi_motion capability absent)",
+                          HTTPD_404_NOT_FOUND);
+    }
+    if (csi_ret != ESP_OK) {
+        return json_error(req, "CSI runtime not ready (no WiFi link?)", 503);
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "message", "CSI recalibration started");
+    return json_ok(req, resp);
+}
+
+/* ------------------------------------------------------------------ */
 /*  GET /api/capabilities                                              */
 /* ------------------------------------------------------------------ */
 
@@ -714,8 +810,10 @@ static esp_err_t handler_capabilities(httpd_req_t *req)
         return json_error(req, "Out of memory", HTTPD_500_INTERNAL_SERVER_ERROR);
     }
 
-    /* 契约 v1.0：12 个布尔能力位 + api_version/wifi_scan（见 docs/api-contract.md） */
-    cJSON_AddStringToObject(data, "api_version", "1.6");
+    /* 契约 v1.0：12 个布尔能力位 + api_version/wifi_scan（见 docs/api-contract.md）
+     * v1.7（2026-09-09）：CSI 调参键族 csi_* 六键 + POST /api/csi/calibrate（本板
+     * CSI-off 生产形态：键接受存储、calibrate 恒 404、csi_motion 能力位不出） */
+    cJSON_AddStringToObject(data, "api_version", "1.7");
 #ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
     cJSON_AddBoolToObject(data, "wifi_scan", true);
 #else
@@ -1478,6 +1576,12 @@ esp_err_t web_server_start(uint16_t port)
         .handler  = handler_api_time,
         .user_ctx = NULL,
     };
+    const httpd_uri_t api_csi_calibrate = {
+        .uri      = "/api/csi/calibrate",   /* 契约 v1.7；CSI-off 板恒 404（handler 内判） */
+        .method   = HTTP_POST,
+        .handler  = handler_csi_calibrate,
+        .user_ctx = NULL,
+    };
 
     /* 通配符匹配按注册顺序生效：精确端点必须先于 GET 通配符静态兜底注册，
      * 否则 /api/camera、/ws 会被静态处理器吞掉返回 404（曾致统一 SPA 失效） */
@@ -1496,6 +1600,7 @@ esp_err_t web_server_start(uint16_t port)
     httpd_register_uri_handler(s_server, &api_camera_post);
     httpd_register_uri_handler(s_server, &api_auth);
     httpd_register_uri_handler(s_server, &api_time);
+    httpd_register_uri_handler(s_server, &api_csi_calibrate);
     httpd_register_uri_handler(s_server, &options_any);
 
 #ifdef CONFIG_MIBEECAM_ENABLE_WS
