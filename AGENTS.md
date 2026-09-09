@@ -104,10 +104,11 @@ To disable a feature: set `=n` in `sdkconfig.defaults`, delete `sdkconfig`, rebu
 ## WiFi quirks (from sdkconfig.defaults)
 
 - **WPA3 fully disabled** (SAE auth issues on this board): WPA3_SAE, SAE_PK, SAE_H2E, SOFTAP_SAE, WPA3_OWE all off.
-- **AMPDU TX/RX 重新启用（2026-09-03 晚，已上板复验）**：原先 =n 是绕驱动 stall 的权宜，
-  但实测 HT40/-70dBm 场景下链路崩塌（ping 1-2.4s、HTTP 8s+）。seeed 现行配置就是
-  AMPDU ON。重开后 `<ba-add>` 会话建立、ping 317ms→5ms、落点 MiBeeAP2 ch2 BW20 -59dBm。
-  若串口再见 stall 可回退（defaults 里有注释）。
+- **AMPDU TX/RX 已关闭(2026-09-09 定案,PIT-039 家族配方)**:2026-09-03 曾重开
+  (seeed 配方、ch2 -59dBm 复验通过),但 2026-09-09 判别实验实锤:AMPDU 开启时
+  本板呈分钟级 TX 楔死(ping/TCP 同死、20 请求 8/20,换网 GT3000 1 米依旧),
+  关闭后 **20/20 零失败、NVR 流会话 16-30s → 2min+、失聪计数零触发**——就是
+  历史上"驱动 stall"的真身。勿再以吞吐为由重开,除非重做判别实验。
 - **STA 强制 HT20**（`wifi_start_sta` 里 `esp_wifi_set_bandwidth`）：本板曾与 HT40 AP
   （ch11）谈到 40MHz，弱信号下 PER 恶化；HT20 灵敏度好 ~3dB（ai-thinker 同款）。
 - Default AP on first boot: SSID `MiBeeCam`, password `12345678`, config at `http://192.168.4.1`.
