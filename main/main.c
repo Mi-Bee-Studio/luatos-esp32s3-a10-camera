@@ -309,7 +309,12 @@ void app_main(void)
         /* --- STA mode --- */
         ESP_LOGI(TAG, "[8/14] Valid WiFi config found, starting STA mode");
 
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+        /* 双网开机入口：last_net 记忆 + RSSI 择优（n16r8 配方，2026-09-09） */
+        ret = wifi_start_sta_boot();
+#else
         ret = wifi_start_sta(cfg->wifi_ssid, cfg->wifi_pass);
+#endif
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "WiFi STA start failed: %s", esp_err_to_name(ret));
             led_set_status(LED_ERROR);

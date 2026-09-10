@@ -114,12 +114,20 @@ esp_err_t wifi_stop_mdns(void);
  * @return 0 = primary SSID, 1 = backup SSID, -1 = AP mode or not connected
  */
 int wifi_get_current_ssid_index(void);
+
+/**
+ * @brief 开机 STA 入口（main.c Step 8）：NVS last_net 记忆 + 双网快扫
+ *        RSSI 择优（≥8dB 规则，n16r8 配方），再发起连接。
+ *        AT+WIFI 热连/故障切换仍走 wifi_start_sta()。
+ * @return ESP_OK on success.
+ */
+esp_err_t wifi_start_sta_boot(void);
 #endif
 
 /**
  * @brief Force a STA re-association (link-collapse recovery, health_monitor 用).
- *        主动断开当前关联；disconnect 事件走既有自动重连路径（10s 重试，
- *        主网连败 3 次自动切备用网）。比重启整机便宜两个数量级。
+ *        主动断开当前关联；断开事件被自致旗标吸收（不计连败），1s 快速
+ *        回连同网；重连失败则正常计败，2 败切另一网（PIT-040/契约 v1.2）。
  */
 void wifi_manager_force_reassoc(void);
 #endif // WIFI_MANAGER_H

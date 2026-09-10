@@ -223,8 +223,23 @@ static void health_monitor_task(void *pvParameters) {
          * 不是射频坏窗而是设备侧真瘫（含"ping 建不起来+链路其实活着"的
          * 误判死循环）——回到重启兜底，避免永久重联不复位。 */
         static int forced_reassocs_no_recovery = 0;
-        if (web_server_get_handle() == NULL) {
-            /* httpd 尚未启动（boot 早期 / STA 未连上的延迟启动）：不计 */
+        if (web_server_get_handle() == NULL && uptime < 300) {
+            /* httpd 尚未启动（boot 早期 / STA 未连上的延迟启动）：不计。
+             * 注意 5min 宽限后不再豁免：web 迟迟不起 = STA 卡 CONNECTING
+             * 的楔死态（服务全部延迟启动），必须走失聪升级链自愈——
+             * 2026-09-09 楔死实录：无此宽限时限的话本门永远静默。 */
+        } else if (web_server_get_handle() == NULL) {
+            link_deaf_count++;
+            ESP_LOGW(TAG, "web server not up after %llus — stuck CONNECTING? deaf (%d/3)",
+                     (unsigned long long)uptime, link_deaf_count);
+            if (link_deaf_count >= 3) {
+                link_deaf_count = 0;
+                if (++forced_reassocs_no_recovery >= 3) {
+                    ESP_LOGE(TAG, "3 forced re-assocs without recovery — device-side wedge, rebooting");
+                    esp_restart();
+                }
+                wifi_manager_force_reassoc();
+            }
         } else if (!probe_httpd_port80()) {
             wifi_state_t probe_ws = wifi_get_state();
             if (probe_ws != WIFI_STATE_STA_CONNECTED && probe_ws != WIFI_STATE_AP) {
