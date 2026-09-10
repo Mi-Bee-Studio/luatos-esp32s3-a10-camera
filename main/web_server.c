@@ -28,7 +28,8 @@
 #include "wifi_manager.h"
 #include "camera_driver.h"
 #include "mjpeg_streamer.h"
-#include "csi_motion.h"  /* 契约 v1.6：/api/status 的 csi 快照字段（本板 CSI-off 恒缺省） */
+#include "csi_motion.h"
+#include "wifi_channel_health.h"  /* 契约 v1.7 ①b */  /* 契约 v1.6：/api/status 的 csi 快照字段（本板 CSI-off 恒缺省） */
 #include "motion_detect.h"
 #include "lwip/sockets.h"  /* setsockopt / TCP_NODELAY in on_session_open */
 #include "event_bus.h"
@@ -355,6 +356,24 @@ static esp_err_t handler_api_status(httpd_req_t *req)
             cJSON_AddNumberToObject(csi_obj, "score", (double)csi.score);
             cJSON_AddNumberToObject(csi_obj, "thr", (double)csi.thr);
             cJSON_AddItemToObject(data, "csi", csi_obj);
+        }
+    }
+    /* 契约 v1.7 ①b：Wi-Fi 信道健康快照（CSI 无关，全家族字段一致） */
+    wifi_chan_health_t ch;
+    if (wifi_channel_health_get(&ch)) {
+        cJSON *ch_obj = cJSON_CreateObject();
+        if (ch_obj) {
+            cJSON_AddNumberToObject(ch_obj, "rssi_avg", (double)ch.rssi_avg);
+            cJSON_AddNumberToObject(ch_obj, "rssi_min", (double)ch.rssi_min);
+            cJSON_AddNumberToObject(ch_obj, "channel", (double)ch.channel);
+            cJSON_AddNumberToObject(ch_obj, "disconnects_1h", (double)ch.disconnects_1h);
+            cJSON_AddNumberToObject(ch_obj, "scan_ts", (double)ch.scan_ts);
+            cJSON_AddNumberToObject(ch_obj, "bss_on_chan", (double)ch.bss_on_chan);
+            cJSON_AddNumberToObject(ch_obj, "bss_total", (double)ch.bss_total);
+            cJSON_AddNumberToObject(ch_obj, "busy_score", (double)ch.busy_score);
+            cJSON_AddNumberToObject(ch_obj, "csi_adm_pps", (double)ch.csi_adm_pps);
+            cJSON_AddNumberToObject(ch_obj, "csi_cb_ratio", (double)ch.csi_cb_ratio);
+            cJSON_AddItemToObject(data, "chan_health", ch_obj);
         }
     }
 

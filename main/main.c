@@ -15,6 +15,7 @@
 #include "config_manager.h"
 #include "wifi_manager.h"
 #include "csi_motion.h"
+#include "wifi_channel_health.h"
 #include "camera_driver.h"
 #include "mjpeg_streamer.h"
 #include "web_server.h"
@@ -289,6 +290,7 @@ void app_main(void)
 
     /* Step 6a: ESPectre CSI motion sensing (optional, needs event loop) */
     csi_motion_init();
+    wifi_channel_health_init();   /* 契约 v1.7 ①b：信道健康感知（CSI 无关，四仓共享） */
 
     /* Register WiFi state callback */
     wifi_register_callback(wifi_state_cb, NULL);
