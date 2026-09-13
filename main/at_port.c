@@ -32,6 +32,7 @@
 #include "health_monitor.h"
 #include "mjpeg_streamer.h"
 #include "motion_detect.h"
+#include "wifi_channel_health.h"   /* 契约 v1.7 ①b：信道健康快照（AT+CHHEALTH） */
 
 static const char *TAG = "at_port";
 
@@ -763,13 +764,105 @@ static esp_err_t ext_cwqap(const char *cmd)
     return ESP_OK;
 }
 
+/* AT+WIFI2 — 备用网络凭据（契约 §5/v1.2 登记扩展）。解析约定同 AT+WIFI=
+ * （首个逗号前 ssid，其后整体 pass、可含逗号）；查询脱敏（§3 红线）。
+ * luatos 生效语义（§6/v1.2）：保存即生效、不重启——备用槽不影响当前
+ * 连接，开机择优 / 连败切换 / DHCP 盲区切换时才读取。 */
+static esp_err_t ext_wifi2(const char *cmd)
+{
+    const char *eq = strchr(cmd, '=');
+    if (!eq) {
+        cam_config_t cfg;
+        config_get_copy(&cfg);
+        ext_data("WIFI2", "ssid:%s", cfg.wifi_ssid_2[0] ? cfg.wifi_ssid_2 : "(none)");
+        ext_data("WIFI2", "pass:%s", cfg.wifi_pass_2[0] ? "****" : "(unset)");
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+        int idx = wifi_get_current_ssid_index();
+        ext_data("WIFI2", "net:%s", idx < 0 ? "ap" : (idx == 1 ? "secondary" : "primary"));
+#endif
+        ext_ok();
+        return ESP_OK;
+    }
+
+    char buf[100];
+    strlcpy(buf, eq + 1, sizeof(buf));
+    char *comma = strchr(buf, ',');
+    if (!comma) {
+        ext_err("usage: AT+WIFI2=ssid,pass (empty ssid clears)");
+        return ESP_OK;
+    }
+    *comma = '\0';
+    const char *ssid = buf;
+    const char *pass = comma + 1;
+
+    cam_config_t cfg;
+    config_get_copy(&cfg);
+    if (!ssid[0]) {
+        /* 空 ssid = 清除备用网络（契约 §5：`ssid,` 空串清除） */
+        cfg.wifi_ssid_2[0] = '\0';
+        cfg.wifi_pass_2[0] = '\0';
+    } else {
+        if (strlen(ssid) >= sizeof(cfg.wifi_ssid_2) || !pass[0] ||
+            strlen(pass) >= sizeof(cfg.wifi_pass_2)) {
+            ext_err("invalid ssid/pass (ssid<=32, pass 1-64)");
+            return ESP_OK;
+        }
+        strlcpy(cfg.wifi_ssid_2, ssid, sizeof(cfg.wifi_ssid_2));
+        strlcpy(cfg.wifi_pass_2, pass, sizeof(cfg.wifi_pass_2));
+    }
+    if (config_save(&cfg) != ESP_OK) {
+        ext_err("save failed");
+        return ESP_OK;
+    }
+    ext_data("WIFI2", "backup network saved (applies at boot-pick/failover, no reboot)");
+    ext_ok();
+    return ESP_OK;
+}
+
+
+/* AT+CHHEALTH?（信道健康快照）/ =SCAN（手动拥塞 scan）——契约 v1.3 ①b（全家族） */
+static esp_err_t ext_chhealth(const char *cmd)
+{
+    char line[144];
+    if (strncasecmp(cmd, "CHHEALTH?", 10) == 0) {
+        wifi_chan_health_t ch;
+        if (!wifi_channel_health_get(&ch)) {
+            at_port_write("+ERROR: chan health not sampled yet\r\n");
+            return ESP_OK;
+        }
+        snprintf(line, sizeof(line),
+                 "+CHHEALTH: rssi %d/%d dBm ch=%u disc_1h=%u busy=%u%% bss=%u/%u\r\n",
+                 (int)ch.rssi_avg, (int)ch.rssi_min, (unsigned)ch.channel,
+                 (unsigned)ch.disconnects_1h, (unsigned)ch.busy_score,
+                 (unsigned)ch.bss_on_chan, (unsigned)ch.bss_total);
+        at_port_write(line);
+        snprintf(line, sizeof(line), "+CHHEALTH: csi_adm=%.1f pps cb_ratio=%.1f scan_ts=%u\r\n",
+                 (double)ch.csi_adm_pps, (double)ch.csi_cb_ratio, (unsigned)ch.scan_ts);
+        at_port_write(line);
+        at_port_write("OK\r\n");
+        return ESP_OK;
+    }
+    if (strncasecmp(cmd, "CHHEALTH=SCAN", 13) == 0) {
+        esp_err_t ret = wifi_channel_health_scan_now();
+        if (ret != ESP_OK) {
+            at_port_write("+ERROR: busy (recording or stream clients)\r\n");
+        } else {
+            at_port_write("+CHHEALTH: scan queued (see CHHEALTH? in ~15s)\r\nOK\r\n");
+        }
+        return ESP_OK;
+    }
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
 static const at_ext_cmd_t s_ext_cmds[] = {
+    { "CHHEALTH", "CHHEALTH? | CHHEALTH=SCAN (channel health)", ext_chhealth },
     { "STREAM?", "MJPEG stream status (clients/max/motion)", ext_stream },
     { "HEAP",    "heap free/min/baseline",                   ext_heap },
     { "UPTIME",  "uptime in seconds",                        ext_uptime },
     { "TEMP",    "chip temperature",                         ext_temp },
     { "NAME",    "NAME? | NAME=name",                        ext_name },
     { "CWQAP",   "clear wifi credentials + AP mode",         ext_cwqap },
+    { "WIFI2",   "WIFI2? | WIFI2=ssid,pass (empty ssid clears)", ext_wifi2 },
 };
 
 const at_ext_cmd_t *at_port_ext_cmds(int *count)
