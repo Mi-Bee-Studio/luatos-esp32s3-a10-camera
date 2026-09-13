@@ -1049,6 +1049,12 @@ async function loadConfig() {
         $('csi-off-hits').value = d.csi_off_hits || 3;
         $('csi-profile').value = String(d.csi_profile || 0);
     }
+    /* AI 开关回读设备态（issue #12）：此前零回读——HTML 默认全关，设备 AI 实开
+     * 时 UI 显示全关而 AI-VGA 锁照常生效（分辨率锁死显得自相矛盾）。键缺失=
+     * 板无 AI 能力，保持默认。联动刷新由启动链后续的 loadCamera() 收尾。 */
+    if (d.ai_face_en !== undefined) setToggle('ai-face', d.ai_face_en);
+    if (d.ai_motion_en !== undefined) setToggle('ai-motion', d.ai_motion_en);
+    if (d.ai_qr_en !== undefined) setToggle('ai-qr', d.ai_qr_en);
     /* 没有任何可编辑项时隐藏 Save（RTSP 凭据走 web_password 的板，该页只读展示） */
     const anyEditable = !$('row-rtsp-user').hidden || !$('row-rtsp-pass').hidden || !$('row-onvif-enable').hidden || !$('row-onvif-events').hidden || !$('row-csi-threshold').hidden;
     $('btn-streaming-save').hidden = !anyEditable;
