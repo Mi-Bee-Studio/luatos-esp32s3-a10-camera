@@ -15,6 +15,7 @@
 #include "config_manager.h"
 #include "wifi_manager.h"
 #include "csi_motion.h"
+#include "wifi_channel_health.h"
 #include "camera_driver.h"
 #include "mjpeg_streamer.h"
 #include "web_server.h"
@@ -289,6 +290,7 @@ void app_main(void)
 
     /* Step 6a: ESPectre CSI motion sensing (optional, needs event loop) */
     csi_motion_init();
+    wifi_channel_health_init();   /* 契约 v1.7 ①b：信道健康感知（CSI 无关，四仓共享） */
 
     /* Register WiFi state callback */
     wifi_register_callback(wifi_state_cb, NULL);
@@ -309,7 +311,12 @@ void app_main(void)
         /* --- STA mode --- */
         ESP_LOGI(TAG, "[8/14] Valid WiFi config found, starting STA mode");
 
+#ifdef CONFIG_MIBEECAM_ENABLE_BACKUP_SSID
+        /* 双网开机入口：last_net 记忆 + RSSI 择优（n16r8 配方，2026-09-09） */
+        ret = wifi_start_sta_boot();
+#else
         ret = wifi_start_sta(cfg->wifi_ssid, cfg->wifi_pass);
+#endif
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "WiFi STA start failed: %s", esp_err_to_name(ret));
             led_set_status(LED_ERROR);

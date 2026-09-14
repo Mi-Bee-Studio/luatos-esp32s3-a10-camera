@@ -104,10 +104,11 @@ To disable a feature: set `=n` in `sdkconfig.defaults`, delete `sdkconfig`, rebu
 ## WiFi quirks (from sdkconfig.defaults)
 
 - **WPA3 fully disabled** (SAE auth issues on this board): WPA3_SAE, SAE_PK, SAE_H2E, SOFTAP_SAE, WPA3_OWE all off.
-- **AMPDU TX/RX 重新启用（2026-09-03 晚，已上板复验）**：原先 =n 是绕驱动 stall 的权宜，
-  但实测 HT40/-70dBm 场景下链路崩塌（ping 1-2.4s、HTTP 8s+）。seeed 现行配置就是
-  AMPDU ON。重开后 `<ba-add>` 会话建立、ping 317ms→5ms、落点 MiBeeAP2 ch2 BW20 -59dBm。
-  若串口再见 stall 可回退（defaults 里有注释）。
+- **AMPDU TX/RX 已关闭(2026-09-09 定案,PIT-039 家族配方)**:2026-09-03 曾重开
+  (seeed 配方、ch2 -59dBm 复验通过),但 2026-09-09 判别实验实锤:AMPDU 开启时
+  本板呈分钟级 TX 楔死(ping/TCP 同死、20 请求 8/20,换网 GT 系主节点 1 米依旧),
+  关闭后 **20/20 零失败、NVR 流会话 16-30s → 2min+、失聪计数零触发**——就是
+  历史上"驱动 stall"的真身。勿再以吞吐为由重开,除非重做判别实验。
 - **STA 强制 HT20**（`wifi_start_sta` 里 `esp_wifi_set_bandwidth`）：本板曾与 HT40 AP
   （ch11）谈到 40MHz，弱信号下 PER 恶化；HT20 灵敏度好 ~3dB（ai-thinker 同款）。
 - Default AP on first boot: SSID `MiBeeCam`, password `12345678`, config at `http://192.168.4.1`.
@@ -119,6 +120,22 @@ To disable a feature: set `=n` in `sdkconfig.defaults`, delete `sdkconfig`, rebu
 ## Frame-buffer constraint (fb_count=1)
 
 With PSRAM off and only one DRAM framebuffer, motion detection and streaming contend for the same frame. Code uses a **sample-and-release pattern** in `frame_broadcaster` + pause-during-stream in motion detect to avoid contention. Raising `fb_count` requires PSRAM, which is disabled — don't try.
+
+## Dual WiFi（2026-09-09，n16r8 配方移植，契约 AT v1.2）
+
+- **开机**：`wifi_start_sta_boot()`（main Step 8）——NVS `wifi_pref/last_net` 记忆为默认，
+  双网异名时独立扫描会话比 RSSI（≥8dB 换网/平局保持/主网不在空中→备网）。
+  扫描会话只起栈→扫→停，连接走原版 `wifi_start_sta`（config 在 start 前，勿改序）。
+- **连败切换**：当前网 2 败（NET_FAILS_SWITCH）切另一网，总次数上限 6
+  （NET_MAX_SWITCHES，连上即清零）后转 AP；替代旧"3 败切备用、备用败→AP 死路"。
+- **DHCP 盲区**：关联后 12s 无 IP → 定时器只做 `esp_wifi_disconnect()`，
+  切换由事件路径计败驱动——**勿在 esp_timer 回调里调 wifi_start_sta/esp_wifi_stop**
+  （小栈 + wifi 任务互锁，2026-09-09 楔死实录）。
+- **sta.scan_method=ALL_CHANNEL_SCAN**：切换风暴后 FAST 扫描缓存过期 → connect 201。
+- **AT+WIFI2**（at_port.c 扩展）：查询脱敏/net 行；`=ssid,pass` 写入、空 ssid 清除；
+  **本板语义=保存即生效不重启**（契约 §6 v1.2）。
+- **自致断开**：`s_expected_disconnect` 旗标 + reason==8 双判据（悬空旗标会吞真实掉线）。
+- 当前生产槽位：primary=GT 系主节点（1 米）/ backup=GT 系副节点（隔墙），两网同密码。
 
 ## Factory reset
 

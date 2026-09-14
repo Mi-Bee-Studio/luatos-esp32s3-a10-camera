@@ -350,7 +350,7 @@ static void mjpeg_listen_task(void *arg)
             enum { HAMMER_SLOTS = 4, HAMMER_MIN_GAP_MS = 5000 };
             static struct {
                 struct in_addr peer;
-                TickType_t last_accept;   /* 上次放行时刻 */
+                TickType_t last_seen;    /* 上次任意接入（放行或拒绝）时刻 */
                 TickType_t until;         /* 退避截止 */
                 uint32_t backoff_ms;
                 uint32_t rejected;
@@ -364,12 +364,20 @@ static void mjpeg_listen_task(void *arg)
                     break;
                 }
             }
-            if (h >= 0 && ((int32_t)(now - s_hammer[h].until) < 0 ||
-                           (int32_t)(now - s_hammer[h].last_accept) <
-                               pdMS_TO_TICKS(HAMMER_MIN_GAP_MS))) {
-                s_hammer[h].until = now + pdMS_TO_TICKS(s_hammer[h].backoff_ms);
-                s_hammer[h].backoff_ms = s_hammer[h].backoff_ms < 300000
-                                             ? s_hammer[h].backoff_ms * 2 : 300000;
+            /* PIT-038 补遗三：只有新的 <5s 违规才续期+翻倍；窗口内守规矩的重连
+             * （≥5s 间隔，如 NVR 的 15s 梯子）被拒但不续期——窗口自然过期
+             * 后即可重新入内。旧逻辑窗口内任何再撞都续期封顶 300s，重连
+             * 间隔短于 300s 的合法客户端被永久锁死（ai 板实测单日拒 2 万+）。 */
+            bool in_window = (h >= 0 && (int32_t)(now - s_hammer[h].until) < 0);
+            bool violation = (h >= 0 && (int32_t)(now - s_hammer[h].last_seen) <
+                                            pdMS_TO_TICKS(HAMMER_MIN_GAP_MS));
+            if (in_window || violation) {
+                if (violation) {
+                    s_hammer[h].until = now + pdMS_TO_TICKS(s_hammer[h].backoff_ms);
+                    s_hammer[h].backoff_ms = s_hammer[h].backoff_ms < 300000
+                                                 ? s_hammer[h].backoff_ms * 2 : 300000;
+                }
+                s_hammer[h].last_seen = now;
                 if (++s_hammer[h].rejected % 50 == 1) {
                     char ipstr[INET_ADDRSTRLEN];
                     inet_ntop(AF_INET, &client_addr.sin_addr, ipstr, sizeof(ipstr));
@@ -377,10 +385,24 @@ static void mjpeg_listen_task(void *arg)
                              (unsigned)s_hammer[h].rejected, ipstr,
                              s_hammer[h].backoff_ms / 1000);
                 }
-                const char *busy =
+                /* 503 带 Retry-After（本次武装的冷却秒数）：客户端遵守即可
+                 * 等过窗口自然重新入内——否则窗口内每次再撞都会续期，与对端
+                 * <300s 的退避梯子互相锁死（2026-09-08 晚，MiBeeNvr#711 对账
+                 * 发现的交互死锁）。Content-Length 同步修正 23→22。 */
+                uint32_t retry_s = 1;
+                if ((int32_t)(s_hammer[h].until - now) > 0) {
+                    retry_s = ((uint32_t)(s_hammer[h].until - now)) /
+                              pdMS_TO_TICKS(1000) + 1;
+                }
+                char busy[128];
+                int bl = snprintf(busy, sizeof(busy),
                     "HTTP/1.1 503 Service Unavailable\r\n"
-                    "Content-Length: 23\r\n\r\nRetry after cooldown\r\n";
-                send(client_sock, busy, strlen(busy), 0);
+                    "Retry-After: %u\r\n"
+                    "Content-Length: 22\r\n\r\nRetry after cooldown\r\n",
+                    (unsigned)retry_s);
+                if (bl > 0) {
+                    send(client_sock, busy, bl, 0);
+                }
                 close(client_sock);
                 continue;
             }
@@ -391,7 +413,7 @@ static void mjpeg_listen_task(void *arg)
                 s_hammer[h].until = 0;
             }
             s_hammer[h].peer = client_addr.sin_addr;
-            s_hammer[h].last_accept = now;
+            s_hammer[h].last_seen = now;
             s_hammer[h].backoff_ms = 10000;
         }
 

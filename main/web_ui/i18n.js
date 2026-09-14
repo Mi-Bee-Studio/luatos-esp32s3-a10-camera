@@ -56,6 +56,8 @@
       /* ---------- Flash LED ---------- */
       'flash.brightness': 'LED Brightness',
       'flash.off': 'Off',
+      'flash.viewers': 'Flash while viewers',
+      'flash.viewers_hint': 'Auto-on while someone watches the stream or takes photos; off 20s after the last viewer leaves. Manual LED control is overridden while viewers are present.',
 
       /* ---------- Network ---------- */
       'network.ssid': 'WiFi SSID',
@@ -259,6 +261,19 @@
       'stats.csi': 'CSI',
       'csi.hint': 'WiFi CSI motion sensing (live score 0-1)',
       'csi.warming': 'CSI calibrating…',
+      'csi.enabled': 'CSI Sensing',
+      'csi.live': 'CSI Live (score / threshold)',
+      'csi.threshold': 'CSI Threshold',
+      'csi.threshold_hint': '0 = auto-calibrate; drag up to lock (locks also stop auto-lowering)',
+      'csi.hits': 'Debounce (on/off)',
+      'csi.profile': 'Detector',
+      'csi.profile_lw': 'Lightweight (self-calibrating)',
+      'csi.profile_ha': 'High-Accuracy (ML, fixed threshold)',
+      'csi.auto_heal': 'Auto-heal (recalibrate on threshold collapse / flip storm)',
+      'csi.calibrate': 'Recalibrate CSI',
+      'csi.cal_started': 'CSI recalibration started',
+      'chan_health.title': 'Channel health',
+      'chan_health.fmt': 'RSSI {rssi} dBm · disconnects {disc}/h · congestion {busy}% · {bss} AP on channel',
     },
 
     zh: {
@@ -313,6 +328,8 @@
       /* ---------- 闪光灯 ---------- */
       'flash.brightness': 'LED \u4eae\u5ea6',
       'flash.off': '\u5173\u95ed',
+      'flash.viewers': '\u6709\u4eba\u89c2\u770b\u65f6\u4eae\u706f',
+      'flash.viewers_hint': '\u6709\u4eba\u770b\u6d41\u6216\u62cd\u7167\u65f6\u81ea\u52a8\u4eae\u8d77\u95ea\u5149\u706f\uff0c\u6700\u540e\u4e00\u4f4d\u79bb\u5f00 20 \u79d2\u540e\u81ea\u52a8\u5173\u95ed\u3002\u6709\u89c2\u770b\u8005\u65f6\u624b\u52a8\u63a7\u706f\u4f1a\u88ab\u8986\u76d6\u3002',
 
       /* ---------- 网络 ---------- */
       'network.ssid': 'WiFi \u540d\u79f0',
@@ -516,6 +533,19 @@
       'stats.csi': 'CSI',
       'csi.hint': 'WiFi CSI 运动感知（实时分数 0-1）',
       'csi.warming': 'CSI 校准中…',
+      'csi.enabled': 'CSI 感知',
+      'csi.live': 'CSI 实时（分数 / 阈值）',
+      'csi.threshold': 'CSI 阈值',
+      'csi.threshold_hint': '0=自动校准；上调即锁定（锁定后不再自动下调）',
+      'csi.hits': '去抖（触发/解除）',
+      'csi.profile': '检测档',
+      'csi.profile_lw': 'Lightweight（自适应阈值）',
+      'csi.profile_ha': 'High-Accuracy（ML 固定阈值）',
+      'csi.auto_heal': '自愈（阈值崩塌/翻转风暴自动重校准）',
+      'csi.calibrate': '重校准 CSI',
+      'csi.cal_started': 'CSI 重校准已启动',
+      'chan_health.title': '信道健康',
+      'chan_health.fmt': 'RSSI {rssi} dBm · 断连 {disc} 次/h · 拥塞 {busy}% · 同信道 {bss} 个 AP',
     },
   };
 
