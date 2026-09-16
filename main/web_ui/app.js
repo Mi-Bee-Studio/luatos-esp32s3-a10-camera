@@ -1055,9 +1055,27 @@ async function loadConfig() {
     if (d.ai_face_en !== undefined) setToggle('ai-face', d.ai_face_en);
     if (d.ai_motion_en !== undefined) setToggle('ai-motion', d.ai_motion_en);
     if (d.ai_qr_en !== undefined) setToggle('ai-qr', d.ai_qr_en);
+    /* 板级扩展 flash_viewers：键在位=板支持（ai-thinker），Light 页显示开关 */
+    if (d.flash_viewers !== undefined) {
+        $('row-flash-viewers').hidden = false;
+        setToggle('flash-viewers', d.flash_viewers);
+    }
     /* 没有任何可编辑项时隐藏 Save（RTSP 凭据走 web_password 的板，该页只读展示） */
     const anyEditable = !$('row-rtsp-user').hidden || !$('row-rtsp-pass').hidden || !$('row-onvif-enable').hidden || !$('row-onvif-events').hidden || !$('row-csi-threshold').hidden;
     $('btn-streaming-save').hidden = !anyEditable;
+}
+
+async function saveFlashViewers() {
+    try {
+        await api('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ flash_viewers: $('flash-viewers').classList.contains('active') ? 1 : 0 })
+        });
+        toast(window.i18n.t('toast.saved'), { type: 'success' });
+    } catch (e) {
+        toast(window.i18n.t('toast.error', { msg: e.message }), { type: 'error' });
+    }
 }
 
 async function saveNetwork() {
@@ -1544,6 +1562,7 @@ const bootSPA = async () => {
     initToggle('ai-qr', () => saveAI());
     initToggle('onvif-enable', () => saveStreaming());
     initToggle('onvif-events', () => saveStreaming());
+    initToggle('flash-viewers', () => saveFlashViewers());   /* 板级扩展 */
     initToggle('csi-enabled', () => saveStreaming());      /* 契约 v1.7 */
     initToggle('csi-auto-heal', () => saveStreaming());
     const csiThr = $('csi-threshold');
