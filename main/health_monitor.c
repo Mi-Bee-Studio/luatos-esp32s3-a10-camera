@@ -1,11 +1,16 @@
 #include "wifi_manager.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
 #include "health_monitor.h"
+#include "web_server.h"
 #include "driver/temperature_sensor.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "ping/ping_sock.h"
 #include <string.h>
 #include <time.h>
 #include "event_bus.h"
@@ -53,6 +58,70 @@ static bool probe_httpd_port80(void)
     }
     close(sock);
     return ok;
+}
+
+/* --- 链路旁证（PIT-040）：探测失败时区分"httpd 真瘫"与"链路失聪" ---
+ * 弱链失聪窗里 localhost 探针会一起超时（httpd 会话被搁浅发送占满 /
+ * tcpip 线程拥塞），旧逻辑照数不误 → 4/4 → 整机重启，而重启治不了射频。
+ * 网关 2 发小包 ICMP（300ms 间隔、800ms 超时），任一应答即链路活着；
+ * 网关地址不可得时返回 false，由调用侧按 WiFi 状态分流。 */
+static SemaphoreHandle_t s_ping_done_sem = NULL;
+static volatile bool s_ping_got_reply;
+
+static void ping_success_cb(esp_ping_handle_t hdl, void *args)
+{
+    s_ping_got_reply = true;
+}
+
+static void ping_end_cb(esp_ping_handle_t hdl, void *args)
+{
+    xSemaphoreGive(s_ping_done_sem);
+}
+
+static bool gateway_link_alive(void)
+{
+    esp_netif_t *netif = esp_netif_get_default_netif();
+    esp_netif_ip_info_t ip;
+    if (!netif || esp_netif_get_ip_info(netif, &ip) != ESP_OK || ip.gw.addr == 0) {
+        return false;
+    }
+    if (!s_ping_done_sem) {
+        s_ping_done_sem = xSemaphoreCreateBinary();
+        if (!s_ping_done_sem) return false;
+    }
+
+    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    cfg.count = 2;
+    cfg.interval_ms = 300;
+    cfg.timeout_ms = 800;
+    cfg.data_size = 16;
+    /* 默认 ≈2.7-3KB（2048+TASK_EXTRA）；失聪窗里堆被搁浅发送压到 3~6KB，
+     * 默认栈屡屡建不起来（2026-09-09 实测 create ping task failed）——
+     * ICMP 收发+给信号量 2048 足够，尽量保住旁证可测性 */
+    cfg.task_stack_size = 2048;
+    cfg.target_addr.type = IPADDR_TYPE_V4;
+    cfg.target_addr.u_addr.ip4.addr = ip.gw.addr;
+
+    esp_ping_callbacks_t cbs = {
+        .cb_args = NULL,
+        .on_ping_success = ping_success_cb,
+        .on_ping_timeout = NULL,
+        .on_ping_end = ping_end_cb,
+    };
+    esp_ping_handle_t ping = NULL;
+    if (esp_ping_new_session(&cfg, &cbs, &ping) != ESP_OK || !ping) {
+        return false;
+    }
+    s_ping_got_reply = false;
+    xSemaphoreTake(s_ping_done_sem, 0);
+    esp_ping_start(ping);
+    bool alive = false;
+    if (xSemaphoreTake(s_ping_done_sem, pdMS_TO_TICKS(4000))) {
+        alive = s_ping_got_reply;
+    }
+    esp_ping_stop(ping);
+    esp_ping_delete_session(ping);
+    return alive;
 }
 
 
@@ -137,26 +206,71 @@ static void health_monitor_task(void *pvParameters) {
         }
 
         /* httpd :80 self-heal: probe every cycle (30s).
-         * 4 consecutive failures (120s unresponsive) → reboot.
          * 2026-09-03 (PIT-002 家族规则): WiFi 未连接时探测必失败（EHOSTUNREACH/EMFILE
          * 也要占用插座），此时不计数——那是网络不在，不是 httpd 死了；否则掉线 120s
-         * 会被翻译成重启，越重启越乱（ai-thinker 同款事故）。 */
+         * 会被翻译成重启，越重启越乱（ai-thinker 同款事故）。
+         * 2026-09-09（PIT-040，luatos 2026-09-08 晚 3 次连环误杀实录）两处补洞：
+         *  - boot 假种子：health（Step 7）先于 web_server（STA 连上后才起）启动，
+         *    首轮探测必失败 → 每 boot 白送 1/4；现在 httpd 未起直接不计。
+         *  - 已连接但半聋：失聪窗里 localhost 探针一起超时，旧逻辑照数不误 →
+         *    4/4 → 整机重启（重启治不了射频，反而把流/NVR 一起打断）。现在
+         *    探测失败先 ping 网关旁证：链路活着才累计 httpd 罪名（4 次重启，
+         *    保持原行为）；链路失聪走快速重联——连续 3 次（≈90s+ 持续失聪）
+         *    主动断开重连，连不上则由 wifi_manager 既有逻辑 3 败切备用网。 */
         static int httpd_stuck_count = 0;
-        if (!probe_httpd_port80()) {
+        static int link_deaf_count = 0;
+        /* 升级阀：失聪判定若连续 3 轮强制重联都换不来一次探测成功，说明
+         * 不是射频坏窗而是设备侧真瘫（含"ping 建不起来+链路其实活着"的
+         * 误判死循环）——回到重启兜底，避免永久重联不复位。 */
+        static int forced_reassocs_no_recovery = 0;
+        if (web_server_get_handle() == NULL && uptime < 300) {
+            /* httpd 尚未启动（boot 早期 / STA 未连上的延迟启动）：不计。
+             * 注意 5min 宽限后不再豁免：web 迟迟不起 = STA 卡 CONNECTING
+             * 的楔死态（服务全部延迟启动），必须走失聪升级链自愈——
+             * 2026-09-09 楔死实录：无此宽限时限的话本门永远静默。 */
+        } else if (web_server_get_handle() == NULL) {
+            link_deaf_count++;
+            ESP_LOGW(TAG, "web server not up after %llus — stuck CONNECTING? deaf (%d/3)",
+                     (unsigned long long)uptime, link_deaf_count);
+            if (link_deaf_count >= 3) {
+                link_deaf_count = 0;
+                if (++forced_reassocs_no_recovery >= 3) {
+                    ESP_LOGE(TAG, "3 forced re-assocs without recovery — device-side wedge, rebooting");
+                    esp_restart();
+                }
+                wifi_manager_force_reassoc();
+            }
+        } else if (!probe_httpd_port80()) {
             wifi_state_t probe_ws = wifi_get_state();
             if (probe_ws != WIFI_STATE_STA_CONNECTED && probe_ws != WIFI_STATE_AP) {
                 httpd_stuck_count = 0;
+                link_deaf_count = 0;
                 ESP_LOGW(TAG, "httpd probe failed but WiFi down — not counting (network issue, not httpd)");
+            } else if (probe_ws == WIFI_STATE_STA_CONNECTED && !gateway_link_alive()) {
+                httpd_stuck_count = 0;
+                link_deaf_count++;
+                ESP_LOGW(TAG, "httpd probe failed, gateway ping lost — link deaf (%d/3)", link_deaf_count);
+                if (link_deaf_count >= 3) {
+                    link_deaf_count = 0;
+                    if (++forced_reassocs_no_recovery >= 3) {
+                        ESP_LOGE(TAG, "3 forced re-assocs without recovery — device-side wedge, rebooting");
+                        esp_restart();
+                    }
+                    wifi_manager_force_reassoc();
+                }
             } else {
+                link_deaf_count = 0;
                 httpd_stuck_count++;
-                ESP_LOGW(TAG, "httpd :80 probe failed (%d/4)", httpd_stuck_count);
+                ESP_LOGW(TAG, "httpd :80 probe failed, link alive (%d/4)", httpd_stuck_count);
                 if (httpd_stuck_count >= 4) {
-                    ESP_LOGE(TAG, "httpd :80 unresponsive for 120s — rebooting");
+                    ESP_LOGE(TAG, "httpd :80 unresponsive for 120s with link alive — rebooting");
                     esp_restart();
                 }
             }
         } else {
             httpd_stuck_count = 0;
+            link_deaf_count = 0;
+            forced_reassocs_no_recovery = 0;
         }
         
         vTaskDelay(pdMS_TO_TICKS(30000)); // 30 seconds

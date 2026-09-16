@@ -92,6 +92,13 @@ static void apply_defaults(cam_config_t *cfg)
     cfg->motion_active_interval_s = 5;
     cfg->alert_webhook_enabled = 0;
     strncpy(cfg->mdns_hostname, CONFIG_DEFAULT_MDNS_HOST, sizeof(cfg->mdns_hostname) - 1);
+    /* CSI 调参键族默认值（契约 v1.7；本板 CSI-off，仅存储） */
+    cfg->csi_enabled = 1;                /* 感知启停，家族默认开 */
+    cfg->csi_threshold = 0.0f;           /* 0=自动（校准+settle） */
+    cfg->csi_on_hits = 4;
+    cfg->csi_off_hits = 3;
+    cfg->csi_profile = 0;                /* Lightweight */
+    cfg->csi_auto_heal = 1;              /* 自愈环默认开（PIT-041） */
     /* wifi_ssid/pass、wifi_ssid_2/pass_2、alert_webhook_url、webhook_secret、
      * server_url 默认全空（memset 0 已就位）*/
 }
@@ -254,6 +261,13 @@ KEY_ASSERT("cam_vflip");
 KEY_ASSERT("cam_hmirror");
 KEY_ASSERT("xclk_freq_mhz");
 KEY_ASSERT("onvif_enable");
+/* CSI 调参键族（契约 v1.7；本板 CSI-off 生产形态，仅存储） */
+KEY_ASSERT("csi_enabled");
+KEY_ASSERT("csi_threshold");
+KEY_ASSERT("csi_on_hits");
+KEY_ASSERT("csi_off_hits");
+KEY_ASSERT("csi_profile");
+KEY_ASSERT("csi_auto_heal");
 KEY_ASSERT("motion_enabled");
 KEY_ASSERT("motion_sens");
 KEY_ASSERT("motion_cool_s");
@@ -315,6 +329,16 @@ static void load_keys_from_nvs(nvs_handle_t h, cam_config_t *cfg)
     rd_u8(h, "cam_hmirror",   &cfg->cam_hmirror);
     rd_u8(h, "xclk_freq_mhz", &cfg->xclk_freq_mhz);
     rd_u8(h, "onvif_enable",  &cfg->onvif_enable);
+    rd_u8(h, "csi_enabled",   &cfg->csi_enabled);
+    {   /* IDF v5.5 无 nvs f32：千分刻度 u16（0-1000 ↔ 0.000-1.000，0=auto），
+         * 与 seeed 同编码（家族 NVS 格式一致） */
+        uint16_t thr_ms = 0;
+        if (rd_u16(h, "csi_threshold", &thr_ms)) cfg->csi_threshold = thr_ms / 1000.0f;
+    }
+    rd_u8(h, "csi_on_hits",  &cfg->csi_on_hits);
+    rd_u8(h, "csi_off_hits", &cfg->csi_off_hits);
+    rd_u8(h, "csi_profile",  &cfg->csi_profile);
+    rd_u8(h, "csi_auto_heal", &cfg->csi_auto_heal);
     rd_u8(h, "motion_enabled", &cfg->motion_enabled);
     rd_u8(h, "motion_sens",   &cfg->motion_sensitivity);
     rd_u16(h, "motion_cool_s", &cfg->motion_cooldown_s);
@@ -343,6 +367,12 @@ static void write_keys_to_nvs(nvs_handle_t h, const cam_config_t *cfg)
     wr_u8(h, "cam_hmirror",  cfg->cam_hmirror);
     wr_u8(h, "xclk_freq_mhz", cfg->xclk_freq_mhz);
     wr_u8(h, "onvif_enable", cfg->onvif_enable);
+    wr_u8(h, "csi_enabled", cfg->csi_enabled);
+    wr_u16(h, "csi_threshold", (uint16_t)(cfg->csi_threshold * 1000.0f + 0.5f));
+    wr_u8(h, "csi_on_hits", cfg->csi_on_hits);
+    wr_u8(h, "csi_off_hits", cfg->csi_off_hits);
+    wr_u8(h, "csi_profile", cfg->csi_profile);
+    wr_u8(h, "csi_auto_heal", cfg->csi_auto_heal);
     wr_u8(h, "motion_enabled", cfg->motion_enabled);
     wr_u8(h, "motion_sens",  cfg->motion_sensitivity);
     wr_u16(h, "motion_cool_s", cfg->motion_cooldown_s);
@@ -722,6 +752,23 @@ bool config_is_valid(const cam_config_t *config)
         ESP_LOGW(TAG, "Invalid config: alert_webhook_url too long");
         return false;
     }
+    /* CSI 调参键族（契约 v1.7 §4 校验矩阵；本板 CSI-off，同样校验，存储无害） */
+    if (config->csi_threshold != 0.0f &&
+        (config->csi_threshold < 0.05f || config->csi_threshold > 1.0f)) {
+        ESP_LOGW(TAG, "Invalid config: csi_threshold=%.3f (must be 0=auto or 0.05-1.0)",
+                 (double)config->csi_threshold);
+        return false;
+    }
+    if (config->csi_on_hits < 1 || config->csi_on_hits > 20 ||
+        config->csi_off_hits < 1 || config->csi_off_hits > 20) {
+        ESP_LOGW(TAG, "Invalid config: csi hits %u/%u (must be 1-20)",
+                 config->csi_on_hits, config->csi_off_hits);
+        return false;
+    }
+    if (config->csi_profile > 1 || config->csi_enabled > 1 || config->csi_auto_heal > 1) {
+        ESP_LOGW(TAG, "Invalid config: csi bool/profile fields not 0/1");
+        return false;
+    }
     return true;
 }
 
@@ -764,6 +811,13 @@ cJSON *config_get_json(void)
     cJSON_AddNumberToObject(root, "cam_hmirror", (double)cfg.cam_hmirror);
     cJSON_AddNumberToObject(root, "xclk_freq_mhz", (double)cfg.xclk_freq_mhz);
     cJSON_AddNumberToObject(root, "onvif_enable", (double)cfg.onvif_enable);
+    /* CSI 调参键族（契约 v1.7；本板 CSI-off，仅存储回显） */
+    cJSON_AddNumberToObject(root, "csi_enabled", (double)cfg.csi_enabled);
+    cJSON_AddNumberToObject(root, "csi_threshold", (double)cfg.csi_threshold);
+    cJSON_AddNumberToObject(root, "csi_on_hits", (double)cfg.csi_on_hits);
+    cJSON_AddNumberToObject(root, "csi_off_hits", (double)cfg.csi_off_hits);
+    cJSON_AddNumberToObject(root, "csi_profile", (double)cfg.csi_profile);
+    cJSON_AddNumberToObject(root, "csi_auto_heal", (double)cfg.csi_auto_heal);
     cJSON_AddNumberToObject(root, "motion_enabled", (double)cfg.motion_enabled);
     cJSON_AddNumberToObject(root, "motion_sensitivity", (double)cfg.motion_sensitivity);
     cJSON_AddNumberToObject(root, "motion_cooldown_s", (double)cfg.motion_cooldown_s);
