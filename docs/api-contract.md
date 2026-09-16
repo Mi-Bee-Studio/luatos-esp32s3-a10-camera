@@ -1,4 +1,4 @@
-# MiBee Cam 家族 API 契约 v1.7
+# MiBee Cam 家族 API 契约 v1.8
 
 > 适用四仓：`ai-thinker-esp32-cam` · `esp32s3-n16r8-cam` · `luatos-esp32s3-a10-camera` · `seeed-esp32s3-cam`
 >
@@ -19,6 +19,9 @@
 > **v1.6 变更（2026-09-08）**：`GET /api/status` 增补可选 `csi` 快照对象
 > （与 §6 `csi_status` 心跳同形同值、同一快照源）——无 WS 服务的 CSI 板
 > （n16r8）由此驱动前端 CSI 胶囊/统计片，与 seeed 的 WS 体验对齐（见 §4/§14）。
+> **v1.8 变更（2026-09-10）**：capabilities 增补 `watermark` 编译期能力位（仅
+> seeed，`MIBEE_WATERMARK`）；水印配置键与回退语义见 `docs/config-contract.md`
+> v1.3 §3.2（`wm_*` 六键，默认全关=零行为差异，运行时可关——issue #11）。
 > **v1.7 变更（2026-09-09）**：CSI 运行时调参面——config 键族 `csi_*` 六键热生效
 > （阈值锁定=断 settle 单边下调，PIT-041 误报根因的根治开关）、动作端点
 > `POST /api/csi/calibrate`、`csi` 快照与 `csi_status` 心跳增补诊断字段
@@ -91,6 +94,11 @@
 config 键 `onvif_events`（默认 0）运行时门控——即商用相机的"运动侦测开关"
 （订阅服务常在，报警随开关）。
 延时摄影：统一走 config 的 `timelapse_*` 字段 + `/api/record`（ai-thinker 的
+`watermark`（布尔，v1.8）：编译期 Kconfig `MIBEE_WATERMARK` 门控（仅 seeed）。
+`true` ⇒ 照片（`GET /api/capture`）与视频轨可烧录水印（自定义文案 + 实时
+时戳）；**运行时开关**由 config 键 `wm_enable`/`wm_video`（默认 0）门控——
+关闭态字节路径与无此特性固件一致（回退保证，见 config-contract v1.3 §3.2）。
+水印失败（内存/分辨率超限/编解码错）一律回退原帧，永不吞帧。
 `/api/timelapse/*` 端点为遗留 tolerated variant，计划收敛）。
 
 ## 4. `/api/status` 字段命名（核心字段，全家族一致）
@@ -349,3 +357,18 @@ q<10 在细节丰富的场景会超预算产生截断帧；q10 实测（ai-think
   录像中或有 MJPEG 观众时跳过（scan 有 ~2s 射频离线成本，PIT-038）。
 - 第一阶段只感知+报告；质量驱动切网/AP 自选信道等自动动作属路线②
   （需 soak 标定后放开）。
+## 17. v1.8 变更清单（2026-09-10，录制/照片水印能力位）
+
+1. **capabilities 增补 `watermark`（布尔，编译期）**：仅 seeed（Kconfig
+   `MIBEE_WATERMARK`，默认 y；`=n` 重编可整体摘除——回退形态）。
+2. **配置面**：`wm_*` 六键（config-contract v1.3 §3.2），默认全关 ⇒ 行为与
+   v1.7 完全一致（零回归回退路径：`wm_enable=0` 即关，无需重刷）。
+3. **水印生效面**：照片 `GET /api/capture`（单帧一次性成本）；视频轨由
+   `wm_video` 独立门控（重编码耗时使实际录制帧率下降，AVI 段尾按 wall-clock
+   实测回填 avih/strh 帧率，播放速度不失真；延时摄影段不回填）。
+4. **回退语义（硬性）**：水印管线任何失败回退原帧；SPA 按配置字段存在性
+   渲染水印卡（无水印能力的板不显示）。
+5. **`GET /api/camera` 增补可选 `day_night` 状态对象**（仅 seeed，
+   `MIBEE_DAY_NIGHT_AUTO` 门）：`{"effective":"color|bw","bw_supported":bool,
+   "luma":0-255|-1,"switches":n}`——day_night_mode=2 自动切换的观测面
+   （判定参数见 config-contract v1.3 §3.2 画质微调行）。
