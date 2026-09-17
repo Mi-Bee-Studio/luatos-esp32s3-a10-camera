@@ -263,6 +263,12 @@ curl -X POST http://192.168.1.100/api/reboot
 
 > **摄像头必须在 WiFi 之前初始化** — 否则 I2C 总线会被 WiFi 子系统抢先占用。
 
+## 🔍 审读代码？从这里入手
+
+- [docs/en/architecture.md](docs/en/architecture.md) — 模块图、依赖关系、启动序列、数据流、板级约束
+- `main/web_server.c` — 全部 HTTP 端点集中在文件顶部的 `s_uris[]` 路由表（文件头有阅读地图）
+- `docs/api-contract.md` · `docs/config-contract.md` · `docs/at-command.md` — MiBee Cam 家族统一的行为契约（带版本号）
+
 详细步骤：
 
 | # | 步骤 | 描述 |
