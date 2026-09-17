@@ -14,6 +14,18 @@
  *   GET  /metrics          — Prometheus-format metrics
  *   OPTIONS any-path     — CORS preflight
  *   GET    any-path     — SPIFFS static files
+ *
+ * READING MAP (authoritative endpoint list = s_uris[] route table, near
+ * the top of this file — the list above may lag behind it):
+ *
+ *   Route table (s_uris[]) .... every HTTP endpoint in one place — start
+ *                               here to answer "what URI is handled where"
+ *   Handlers .................. one static esp_err_t handler_*() per
+ *                               endpoint, same names as the table
+ *   web_server_start() ........ httpd config + /ws (conditional) +
+ *                               registration loop over the table
+ *
+ * Behavior contracts: docs/api-contract.md (family-wide, versioned).
  */
 
 #include "web_server.h"
@@ -42,6 +54,65 @@
 
 static const char *TAG = "web_server";
 static httpd_handle_t s_server = NULL;
+
+/* ------------------------------------------------------------------ */
+/*  Route table — the complete HTTP surface of this server, listed in  */
+/*  registration order (family pattern, see sister repos). Handler     */
+/*  bodies live further down in this file. Wildcard matching is        */
+/*  registration-order sensitive: exact endpoints first, the GET       */
+/*  catch-all LAST (and /ws registers before the loop in              */
+/*  web_server_start() when enabled).                                  */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    const char  *uri;
+    httpd_method_t method;
+    esp_err_t (*handler)(httpd_req_t *);
+} uri_entry_t;
+
+static esp_err_t handler_api_status(httpd_req_t *req);
+static esp_err_t handler_api_config_get(httpd_req_t *req);
+static esp_err_t handler_api_config_post(httpd_req_t *req);
+static esp_err_t handler_capabilities(httpd_req_t *req);
+static esp_err_t handler_capture(httpd_req_t *req);
+static esp_err_t handler_reset(httpd_req_t *req);
+static esp_err_t handler_reboot(httpd_req_t *req);
+#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
+static esp_err_t handler_scan(httpd_req_t *req);
+#endif
+static esp_err_t handler_metrics(httpd_req_t *req);
+static esp_err_t handler_api_camera_get(httpd_req_t *req);
+static esp_err_t handler_api_camera_post(httpd_req_t *req);
+static esp_err_t handler_api_auth(httpd_req_t *req);
+static esp_err_t handler_api_time(httpd_req_t *req);
+static esp_err_t handler_csi_calibrate(httpd_req_t *req);
+static esp_err_t handler_options(httpd_req_t *req);
+static esp_err_t handler_static(httpd_req_t *req);
+
+static const uri_entry_t s_uris[] = {
+    { "/api/status",       HTTP_GET,    handler_api_status    },
+    { "/api/config",       HTTP_GET,    handler_api_config_get },
+    { "/api/config",       HTTP_POST,   handler_api_config_post },
+    { "/api/capabilities", HTTP_GET,    handler_capabilities  },
+    { "/api/capture",      HTTP_GET,    handler_capture       },
+    { "/api/reset",        HTTP_POST,   handler_reset         },
+    { "/api/reboot",       HTTP_POST,   handler_reboot        },
+#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
+    { "/api/scan",         HTTP_GET,    handler_scan          },
+#endif
+    { "/metrics",          HTTP_GET,    handler_metrics       },
+    { "/api/camera",       HTTP_GET,    handler_api_camera_get },
+    { "/api/camera",       HTTP_POST,   handler_api_camera_post },
+    { "/api/auth",         HTTP_GET,    handler_api_auth      },
+    { "/api/time",         HTTP_POST,   handler_api_time      },
+    { "/api/csi/calibrate", HTTP_POST,  handler_csi_calibrate },  /* 契约 v1.7；CSI-off 板恒 404（handler 内判） */
+    /* CORS preflight — wildcard */
+    { "/*",                HTTP_OPTIONS, handler_options      },
+    /* Static files — catch-all (lowest priority, must stay last) */
+    { "/*",                HTTP_GET,    handler_static        },
+};
+
+#define NUM_URIS (sizeof(s_uris) / sizeof(s_uris[0]))
 
 #include "health_monitor.h"
 
@@ -1502,129 +1573,10 @@ esp_err_t web_server_start(uint16_t port)
         return ESP_FAIL;
     }
 
-    /* API endpoints */
-    const httpd_uri_t api_status = {
-        .uri      = "/api/status",
-        .method   = HTTP_GET,
-        .handler  = handler_api_status,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t api_config_get = {
-        .uri      = "/api/config",
-        .method   = HTTP_GET,
-        .handler  = handler_api_config_get,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t api_config_post = {
-        .uri      = "/api/config",
-        .method   = HTTP_POST,
-        .handler  = handler_api_config_post,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t api_capabilities = {
-        .uri      = "/api/capabilities",
-        .method   = HTTP_GET,
-        .handler  = handler_capabilities,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t api_capture = {
-        .uri      = "/api/capture",
-        .method   = HTTP_GET,
-        .handler  = handler_capture,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t api_reset = {
-        .uri      = "/api/reset",
-        .method   = HTTP_POST,
-        .handler  = handler_reset,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t api_reboot = {
-        .uri      = "/api/reboot",
-        .method   = HTTP_POST,
-        .handler  = handler_reboot,
-        .user_ctx = NULL,
-    };
-#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
-    const httpd_uri_t api_scan = {
-        .uri      = "/api/scan",
-        .method   = HTTP_GET,
-        .handler  = handler_scan,
-        .user_ctx = NULL,
-    };
-#endif
-    const httpd_uri_t metrics = {
-        .uri      = "/metrics",
-        .method   = HTTP_GET,
-        .handler  = handler_metrics,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t options_any = {
-        .uri      = "/*",
-        .method   = HTTP_OPTIONS,
-        .handler  = handler_options,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t static_any = {
-        .uri      = "/*",
-        .method   = HTTP_GET,
-        .handler  = handler_static,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t api_camera_get = {
-        .uri      = "/api/camera",
-        .method   = HTTP_GET,
-        .handler  = handler_api_camera_get,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t api_camera_post = {
-        .uri      = "/api/camera",
-        .method   = HTTP_POST,
-        .handler  = handler_api_camera_post,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t api_auth = {
-        .uri      = "/api/auth",
-        .method   = HTTP_GET,
-        .handler  = handler_api_auth,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t api_time = {
-        .uri      = "/api/time",
-        .method   = HTTP_POST,
-        .handler  = handler_api_time,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t api_csi_calibrate = {
-        .uri      = "/api/csi/calibrate",   /* 契约 v1.7；CSI-off 板恒 404（handler 内判） */
-        .method   = HTTP_POST,
-        .handler  = handler_csi_calibrate,
-        .user_ctx = NULL,
-    };
-
-    /* 通配符匹配按注册顺序生效：精确端点必须先于 GET 通配符静态兜底注册，
-     * 否则 /api/camera、/ws 会被静态处理器吞掉返回 404（曾致统一 SPA 失效） */
-    httpd_register_uri_handler(s_server, &api_status);
-    httpd_register_uri_handler(s_server, &api_config_get);
-    httpd_register_uri_handler(s_server, &api_config_post);
-    httpd_register_uri_handler(s_server, &api_capabilities);
-    httpd_register_uri_handler(s_server, &api_capture);
-    httpd_register_uri_handler(s_server, &api_reset);
-    httpd_register_uri_handler(s_server, &api_reboot);
-#ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
-    httpd_register_uri_handler(s_server, &api_scan);
-#endif
-    httpd_register_uri_handler(s_server, &metrics);
-    httpd_register_uri_handler(s_server, &api_camera_get);
-    httpd_register_uri_handler(s_server, &api_camera_post);
-    httpd_register_uri_handler(s_server, &api_auth);
-    httpd_register_uri_handler(s_server, &api_time);
-    httpd_register_uri_handler(s_server, &api_csi_calibrate);
-    httpd_register_uri_handler(s_server, &options_any);
-
 #ifdef CONFIG_MIBEECAM_ENABLE_WS
     /* 契约 §3.2 WebSocket 组：ws_enable=0 时不注册 /ws（也不订阅事件，
-     * 重启生效——能力位不变，仅运行时入口关闭） */
+     * 重启生效——能力位不变，仅运行时入口关闭）。
+     * /ws 必须先于路由表内的 GET 通配符静态兜底注册（见下方顺序说明） */
     if (config_get()->ws_enable) {
         ws_clients_init();
         httpd_uri_t uri_ws = {
@@ -1651,8 +1603,18 @@ esp_err_t web_server_start(uint16_t port)
     }
 #endif
 
-    /* 静态兜底必须最后注册（见上方顺序说明） */
-    httpd_register_uri_handler(s_server, &static_any);
+    /* 路由表注册（s_uris[] 在文件顶部）。通配符匹配按注册顺序生效：
+     * 精确端点在前、/ws 已于上方注册、GET 通配符静态兜底在表尾——
+     * 顺序错会让 /api/camera、/ws 被静态处理器吞掉返回 404（曾致统一 SPA 失效） */
+    for (size_t i = 0; i < NUM_URIS; i++) {
+        httpd_uri_t uri = {
+            .uri      = s_uris[i].uri,
+            .method   = s_uris[i].method,
+            .handler  = s_uris[i].handler,
+            .user_ctx = NULL,
+        };
+        httpd_register_uri_handler(s_server, &uri);
+    }
 
     ESP_LOGI(TAG, "Web server started on port %d", port);
     return ESP_OK;
