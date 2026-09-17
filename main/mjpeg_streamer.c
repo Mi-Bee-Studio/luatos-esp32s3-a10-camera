@@ -647,9 +647,14 @@ void mjpeg_streamer_stop(void)
 
 int mjpeg_streamer_get_client_count(void)
 {
-    int count;
-    xSemaphoreTake(s_mutex, portMAX_DELAY);
-    count = s_client_count;
-    xSemaphoreGive(s_mutex);
+    /* 锁在 mjpeg_streamer_init()（启动 Step 10）才创建；chan_health 任务
+     * Step 6a 即启动且首圈立即扫拥塞（issue #18）——NULL 期返回 0 客户端
+     * （流服务未起=无观众，语义正确）。同款守卫见 n16r8 移植。 */
+    int count = 0;
+    if (s_mutex) {
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        count = s_client_count;
+        xSemaphoreGive(s_mutex);
+    }
     return count;
 }
