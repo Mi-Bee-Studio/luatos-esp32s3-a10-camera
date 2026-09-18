@@ -16,8 +16,8 @@
 #include "esp_err.h"
 #include "cJSON.h"
 
-/* 家族 schema 版本（契约 §1）：独立于各仓历史 blob 版本号，迁移后一律 =1 */
-#define CONFIG_SCHEMA_VERSION 1
+/* 家族 schema 版本（契约 §1）：独立于各仓历史 blob 版本号 */
+#define CONFIG_SCHEMA_VERSION 2   /* v2.0：web_password 删除（契约 §8：旧键不再读取，NVS 残留无害） */
 
 /* 默认值 */
 #define CONFIG_DEFAULT_TIMEZONE    "CST-8"
@@ -34,7 +34,6 @@ typedef struct {
     char     wifi_ssid_2[33];            /* 备用网络，空=禁用 */
     char     wifi_pass_2[65];            /* 敏感 */
     char     timezone[48];               /* POSIX TZ，str<=47（契约 §3.1）*/
-    char     web_password[33];           /* >=6 位，敏感 */
     uint8_t  cam_framesize;              /* framesize_t 刻度（10-15）；本板上限 VGA=10 */
     uint8_t  cam_fps;                    /* 1-30，默认 15 */
     uint8_t  cam_quality;                /* 10-63（PIT-021），默认 12 */
@@ -115,10 +114,5 @@ const char *config_get_timezone(void);
  * @return cJSON* 对象，调用者负责释放内存
  */
 cJSON *config_get_json(void);
-
-/**
- * @brief 获取 Web UI 密码
- */
-const char *config_get_web_password(void);
 
 #endif /* CONFIG_MANAGER_H */

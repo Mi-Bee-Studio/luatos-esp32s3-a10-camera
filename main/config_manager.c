@@ -25,15 +25,11 @@
 
 static const char *TAG = "config";
 
-/* 契约 v1.1：家族统一默认管理密码（公开默认 mibeecam2026，本地可在 gitignored sdkconfig 覆盖） */
-#define DEFAULT_WEB_PASSWORD CONFIG_MIBEE_CAM_DEFAULT_WEB_PASSWORD
-
 #define NVS_NS          "mibee_cfg"      /* 家族统一命名空间（契约 §1）*/
 #define NVS_NS_LEGACY   "device_cfg"     /* 前代命名空间（2026-09 前的 blob 所在地）*/
 #define KEY_SCHEMA_VER  "schema_ver"
 #define KEY_BLOB        "config"         /* legacy blob 键（迁移源）*/
 #define KEY_LEGACY_BAK  "config_bak"     /* 迁移后的 legacy blob 备份键（只读回滚）*/
-#define KEY_PW_SEED     "pw_seed_v1"     /* 契约 v1.1 密码一次性种子标记 */
 
 static cam_config_t s_config = {0};
 static bool s_config_initialized = false;
@@ -75,7 +71,6 @@ static void apply_defaults(cam_config_t *cfg)
 {
     memset(cfg, 0, sizeof(cam_config_t));
     strncpy(cfg->device_name, CONFIG_DEFAULT_DEVICE_NAME, sizeof(cfg->device_name) - 1);
-    strncpy(cfg->web_password, DEFAULT_WEB_PASSWORD, sizeof(cfg->web_password) - 1);
     strncpy(cfg->timezone, CONFIG_DEFAULT_TIMEZONE, sizeof(cfg->timezone) - 1);
     cfg->cam_framesize = CAMERA_RES_VGA;               /* 10，板上限（§5）*/
     cfg->cam_fps = 15;
@@ -127,7 +122,7 @@ typedef struct {
     uint8_t resolution;        /* 旧刻度 0-3 */
     uint8_t fps;
     uint8_t jpeg_quality;
-    char web_password[33];
+    char _pw_reserved[33];     /* 原管理密码（v2.0 随密码体系移除）：仅保字节布局，勿引用/勿改尺寸 */
     char timezone[33];
     uint8_t motion_threshold;  /* 0-100，越小越灵 */
     uint8_t motion_cooldown;
@@ -144,7 +139,7 @@ typedef struct {
     uint8_t resolution;        /* 旧刻度 0-3 */
     uint8_t fps;
     uint8_t jpeg_quality;
-    char web_password[33];
+    char _pw_reserved[33];     /* 原管理密码（v2.0 随密码体系移除）：仅保字节布局，勿引用/勿改尺寸 */
     char timezone[33];
     uint8_t motion_threshold;
     uint8_t motion_cooldown;
@@ -199,7 +194,6 @@ static void map_legacy_v2(const legacy_v2_t *lc, cam_config_t *cfg)
     } else {
         cfg->cam_quality = lc->jpeg_quality;
     }
-    copy_legacy_str(cfg->web_password, lc->web_password, sizeof(cfg->web_password));
     copy_legacy_str(cfg->timezone, lc->timezone, sizeof(cfg->timezone));
     cfg->motion_sensitivity = threshold_to_sensitivity(lc->motion_threshold);
     cfg->motion_cooldown_s = (lc->motion_cooldown >= 1)   /* u8 <=255 天然 <300 */
@@ -223,7 +217,6 @@ static void map_legacy_v3(const legacy_v3_t *lc, cam_config_t *cfg)
     } else {
         cfg->cam_quality = lc->jpeg_quality;
     }
-    copy_legacy_str(cfg->web_password, lc->web_password, sizeof(cfg->web_password));
     copy_legacy_str(cfg->timezone, lc->timezone, sizeof(cfg->timezone));
     cfg->motion_sensitivity = threshold_to_sensitivity(lc->motion_threshold);
     cfg->motion_cooldown_s = (lc->motion_cooldown >= 1)   /* u8 <=255 天然 <300 */
@@ -253,7 +246,6 @@ KEY_ASSERT("wifi_pass");
 KEY_ASSERT("wifi_ssid_2");
 KEY_ASSERT("wifi_pass_2");
 KEY_ASSERT("timezone");
-KEY_ASSERT("web_password");
 KEY_ASSERT("cam_framesize");
 KEY_ASSERT("cam_fps");
 KEY_ASSERT("cam_quality");
@@ -277,7 +269,6 @@ KEY_ASSERT("motion_act_s");
 KEY_ASSERT("webhook_en");
 KEY_ASSERT("webhook_url");
 KEY_ASSERT("webhook_secret");
-KEY_ASSERT("pw_seed_v1");
 KEY_ASSERT("config_bak");
 
 /* 字符串键读取：缺键/读失败 → 保持默认（返回 false）*/
@@ -321,7 +312,6 @@ static void load_keys_from_nvs(nvs_handle_t h, cam_config_t *cfg)
     rd_str(h, "wifi_ssid_2",   cfg->wifi_ssid_2,   sizeof(cfg->wifi_ssid_2));
     rd_str(h, "wifi_pass_2",   cfg->wifi_pass_2,   sizeof(cfg->wifi_pass_2));
     rd_str(h, "timezone",      cfg->timezone,      sizeof(cfg->timezone));
-    rd_str(h, "web_password",  cfg->web_password,  sizeof(cfg->web_password));
     rd_u8(h, "cam_framesize", &cfg->cam_framesize);
     rd_u8(h, "cam_fps",       &cfg->cam_fps);
     rd_u8(h, "cam_quality",   &cfg->cam_quality);
@@ -359,7 +349,6 @@ static void write_keys_to_nvs(nvs_handle_t h, const cam_config_t *cfg)
     wr_str(h, "wifi_ssid_2",  cfg->wifi_ssid_2);
     wr_str(h, "wifi_pass_2",  cfg->wifi_pass_2);
     wr_str(h, "timezone",     cfg->timezone);
-    wr_str(h, "web_password", cfg->web_password);
     wr_u8(h, "cam_framesize", cfg->cam_framesize);
     wr_u8(h, "cam_fps",      cfg->cam_fps);
     wr_u8(h, "cam_quality",  cfg->cam_quality);
@@ -384,24 +373,6 @@ static void write_keys_to_nvs(nvs_handle_t h, const cam_config_t *cfg)
     wr_str(h, "server_url",  cfg->server_url);
     wr_str(h, "mdns_hostname", cfg->mdns_hostname);
     wr_u16(h, KEY_SCHEMA_VER, CONFIG_SCHEMA_VERSION);
-}
-
-/* ── pw_seed_v1 标记查询：新旧两个命名空间都查（已种过的设备不得重种）── */
-static bool pw_seed_marker_present(void)
-{
-    static const char *namespaces[] = { NVS_NS, NVS_NS_LEGACY };
-    for (size_t i = 0; i < sizeof(namespaces) / sizeof(namespaces[0]); i++) {
-        nvs_handle_t h;
-        uint8_t flag = 0;
-        if (nvs_open(namespaces[i], NVS_READONLY, &h) == ESP_OK) {
-            bool have = (nvs_get_u8(h, KEY_PW_SEED, &flag) == ESP_OK && flag == 1);
-            nvs_close(h);
-            if (have) {
-                return true;
-            }
-        }
-    }
-    return false;
 }
 
 /* ── Legacy blob → 逐键一次性迁移（幂等：schema_ver 存在即跳过）──
@@ -483,18 +454,6 @@ static bool migrate_legacy_blob(void)
         return false;
     }
 
-    /* 密码一次性种子（契约 v1.1）：标记缺失 = 旧固件时代设备可能带未知历史
-     * 密码 → 统一种为家族默认；已种过则保留 blob 中的密码 */
-    bool pw_seeded = pw_seed_marker_present();
-    if (!pw_seeded) {
-        ESP_LOGW(TAG, "One-shot password seed: unifying web_password to family default");
-        strncpy(migrated.web_password, DEFAULT_WEB_PASSWORD, sizeof(migrated.web_password) - 1);
-        migrated.web_password[sizeof(migrated.web_password) - 1] = '\0';
-    }
-    if (migrated.web_password[0] == '\0') {
-        strncpy(migrated.web_password, DEFAULT_WEB_PASSWORD, sizeof(migrated.web_password) - 1);
-    }
-
     /* 翻译结果落逐键 */
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
         ESP_LOGE(TAG, "Cannot open %s for migration write", NVS_NS);
@@ -502,9 +461,6 @@ static bool migrate_legacy_blob(void)
         return false;
     }
     write_keys_to_nvs(h, &migrated);
-    if (!pw_seeded) {
-        nvs_set_u8(h, KEY_PW_SEED, 1);
-    }
     esp_err_t ret = nvs_commit(h);
     nvs_close(h);
     if (ret != ESP_OK) {
@@ -624,10 +580,6 @@ esp_err_t config_init(void)
     s_config.ws_enable = s_config.ws_enable ? 1 : 0;
     s_config.motion_enabled = s_config.motion_enabled ? 1 : 0;
     s_config.alert_webhook_enabled = s_config.alert_webhook_enabled ? 1 : 0;
-    /* 契约 v1.1：空密码迁移到家族统一默认 */
-    if (s_config.web_password[0] == '\0') {
-        strncpy(s_config.web_password, DEFAULT_WEB_PASSWORD, sizeof(s_config.web_password) - 1);
-    }
     if (s_config.mdns_hostname[0] == '\0') {
         strncpy(s_config.mdns_hostname, CONFIG_DEFAULT_MDNS_HOST,
                 sizeof(s_config.mdns_hostname) - 1);
@@ -744,10 +696,6 @@ bool config_is_valid(const cam_config_t *config)
         ESP_LOGW(TAG, "Invalid config: mdns_hostname is empty or too long");
         return false;
     }
-    if (config->web_password[0] != '\0' && strlen(config->web_password) < 6) {
-        ESP_LOGW(TAG, "Invalid config: web_password shorter than 6 chars");
-        return false;
-    }
     if (config->alert_webhook_url[0] != '\0' && strlen(config->alert_webhook_url) >= 256) {
         ESP_LOGW(TAG, "Invalid config: alert_webhook_url too long");
         return false;
@@ -803,7 +751,6 @@ cJSON *config_get_json(void)
     cJSON_AddStringToObject(root, "wifi_ssid_2", cfg.wifi_ssid_2);
     cJSON_AddStringToObject(root, "wifi_pass_2", cfg.wifi_pass_2[0] ? "****" : "");
     cJSON_AddStringToObject(root, "timezone", cfg.timezone);
-    cJSON_AddStringToObject(root, "web_password", cfg.web_password[0] ? "****" : "");
     cJSON_AddNumberToObject(root, "cam_framesize", (double)cfg.cam_framesize);
     cJSON_AddNumberToObject(root, "cam_fps", (double)cfg.cam_fps);
     cJSON_AddNumberToObject(root, "cam_quality", (double)cfg.cam_quality);
@@ -831,9 +778,4 @@ cJSON *config_get_json(void)
     cJSON_AddNumberToObject(root, "schema_version", (double)CONFIG_SCHEMA_VERSION);
 
     return root;
-}
-
-const char *config_get_web_password(void)
-{
-    return s_config.web_password;
 }

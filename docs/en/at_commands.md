@@ -120,7 +120,7 @@ Response: \r\nOK\r\n
 
 #### AT+CFGGET=<field>
 Get config field value.
-Fields: wifi_ssid, wifi_pass, wifi_ssid2, wifi_pass2, device_name, server_url, timezone, web_password, mdns_hostname, webhook_url, resolution, fps, jpeg_quality, motion_threshold, motion_cooldown, onvif_enabled, ws_enabled
+Fields: wifi_ssid, wifi_pass, wifi_ssid2, wifi_pass2, device_name, server_url, timezone, mdns_hostname, webhook_url, resolution, fps, jpeg_quality, motion_threshold, motion_cooldown, onvif_enabled, ws_enabled
 Response: \r\n+CFGGET:<field>=<value>\r\n\r\nOK\r\n
 
 #### AT+CFGSET=<field>,<value>

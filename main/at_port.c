@@ -354,7 +354,6 @@ static const port_field_t s_fields[] = {
     PF_SEC("wifi_pass",                wifi_pass),
     PF_STR("wifi_ssid_2",              wifi_ssid_2),
     PF_SEC("wifi_pass_2",              wifi_pass_2),
-    PF_SEC("web_password",             web_password),
     PF_STR("timezone",                 timezone),
     PF_U8("cam_framesize",             cam_framesize),
     PF_U8("cam_fps",                   cam_fps),
@@ -481,11 +480,6 @@ static esp_err_t cfg_set_wifi_pass_2(const char *v)
 {
     return set_str_field(find_field("wifi_pass_2"), v, true);
 }
-static esp_err_t cfg_set_web_password(const char *v)
-{
-    if (!v || strlen(v) < 6) return ESP_ERR_INVALID_ARG;   /* 契约 v1.1 下限 */
-    return set_str_field(find_field("web_password"), v, false);
-}
 static esp_err_t cfg_set_device_name(const char *v)
 {
     return set_str_field(find_field("device_name"), v, false);
@@ -602,7 +596,6 @@ static const at_cfg_field_t s_cfg_fields[] = {
     { "wifi_pass",                AT_CFG_STR, true,  NULL,                       cfg_set_wifi_pass },
     { "wifi_ssid_2",              AT_CFG_STR, false, cfg_get_wifi_ssid_2,        cfg_set_wifi_ssid_2 },
     { "wifi_pass_2",              AT_CFG_STR, true,  NULL,                       cfg_set_wifi_pass_2 },
-    { "web_password",             AT_CFG_STR, true,  NULL,                       cfg_set_web_password },
     { "timezone",                 AT_CFG_STR, false, cfg_get_timezone,           cfg_set_timezone },
     { "cam_framesize",            AT_CFG_U8,  false, cfg_get_cam_framesize,      cfg_set_cam_framesize },
     { "cam_fps",                  AT_CFG_U8,  false, cfg_get_cam_fps,            cfg_set_cam_fps },
