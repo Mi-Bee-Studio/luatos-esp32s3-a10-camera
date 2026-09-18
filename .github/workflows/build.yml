@@ -154,7 +154,7 @@ jobs:
           ## First-time Setup
 
           1. Flash firmware and SPIFFS
-          2. Device starts AP mode: SSID=MiBeeCam, Password=12345678
+          2. Device starts AP mode: SSID=MiBeeCam, Password=mibeecam2026
           3. Connect to AP, open http://192.168.4.1
           4. Configure WiFi credentials
           5. Device reboots in STA mode

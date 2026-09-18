@@ -119,7 +119,7 @@ IP: <ip>\r\n
 
 #### AT+CFGGET=<field>
 获取配置字段值。
-字段：wifi_ssid, wifi_pass, wifi_ssid2, wifi_pass2, device_name, server_url, timezone, web_password, mdns_hostname, webhook_url, resolution, fps, jpeg_quality, motion_threshold, motion_cooldown, onvif_enabled, ws_enabled
+字段：wifi_ssid, wifi_pass, wifi_ssid2, wifi_pass2, device_name, server_url, timezone, mdns_hostname, webhook_url, resolution, fps, jpeg_quality, motion_threshold, motion_cooldown, onvif_enabled, ws_enabled
 响应：\r\n+CFGGET:<field>=<value>\r\n\r\nOK\r\n
 
 #### AT+CFGSET=<field>,<value>

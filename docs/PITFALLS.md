@@ -181,10 +181,10 @@ seeed（.133）日志每 60s 报 `Chip temperature high (93.5°C)`（规格上�
 家族 OTA 端点（seeed / ai-thinker / n16r8 有；**luatos 单分区无 OTA**）吃的是
 **裸二进制流，不是 multipart**：
 ```bash
-curl -X POST http://<ip>/api/ota/upload -H 'X-Password: <pwd>' \
+curl -X POST http://<ip>/api/ota/upload \
      -H 'Content-Type: application/octet-stream' \
      --data-binary @build/mibee_cam.bin        # 固件 → next OTA 槽 → 自动重启
-curl -X POST http://<ip>/api/ota/spiffs -H 'X-Password: <pwd>' \
+curl -X POST http://<ip>/api/ota/spiffs \
      --data-binary @build/spiffs.bin           # UI → 整擦 SPIFFS → 自动重启
 ```
 注意：镜像必须 ≤ OTA 槽尺寸（seeed 1.9MB）；上传中途失败 SPIFFS 即丢（只能串口救）；
@@ -425,6 +425,8 @@ GitHub org 代码搜索 `gh api search/code q='"<串>" org:…'`。
 本地自用值仍为 `REDACTED-PW`，仅存本机 gitignored `sdkconfig`。同时清掉了文档中
 更早残留的 `admin` 默认密码示例（4 cam 仓 141+ 处、mibee-docs 140 处）——
 "文档示例里的默认口令"也要跟着契约演进同步，否则又是另一种凭据漂移。
+（2026-09-18：Web 密码体系已随契约 v1.9/config v2.0 移除——`web_password`/
+`pw_seed_v1`/Kconfig 默认密码全部废除，本 PIT 仅为历史记录。）
 
 ### PIT-028 IDLE1 "task not found" 洪水：运行期 esp_task_wdt_delete(IDLE1) 只删订阅条目不注销空闲钩子；"零静态引用"结论毁于编译器内联（2026-09-05，n16r8）
 

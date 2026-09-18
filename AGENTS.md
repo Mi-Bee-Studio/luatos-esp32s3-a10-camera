@@ -111,7 +111,7 @@ To disable a feature: set `=n` in `sdkconfig.defaults`, delete `sdkconfig`, rebu
   历史上"驱动 stall"的真身。勿再以吞吐为由重开,除非重做判别实验。
 - **STA 强制 HT20**（`wifi_start_sta` 里 `esp_wifi_set_bandwidth`）：本板曾与 HT40 AP
   （ch11）谈到 40MHz，弱信号下 PER 恶化；HT20 灵敏度好 ~3dB（ai-thinker 同款）。
-- Default AP on first boot: SSID `MiBeeCam`, password `12345678`, config at `http://192.168.4.1`.
+- Default AP on first boot: SSID `MiBeeCam`, password `mibeecam2026`, config at `http://192.168.4.1`.
 - **status 新字段（2026-09-03 晚）**：`current_ssid`（实连 SSID）、`wifi_net`
   （primary|secondary，映射自 active_ssid_index）——SPA 顶栏/WiFi 页当前连接行依赖它们。
 - **health 探测防误杀（PIT-002）**：WiFi 未连接时探测失败不计数（此前 4/4 无条件重启，
@@ -188,6 +188,8 @@ Hold **BOOT** (GPIO 0) for 5 s → clears NVS, reboots into AP mode. (On `ai-thi
 >
 > **契约 v1.1（2026-09-02）**：公开默认密码统一为 `mibeecam2026`（Kconfig 默认值，可入文档；本地部署可在 gitignored sdkconfig 用 `CONFIG_MIBEE_CAM_DEFAULT_WEB_PASSWORD` 覆盖；空密码加载自动迁移）、拒绝 <6 位密码；
 > api_version=1.1。
+> **（2026-09-18 契约 v1.9/config v2.0：Web 密码体系已整体移除——X-Password/
+> web_password/Kconfig 默认密码全部废除，端点开放于可信 LAN，本条仅作历史记录。）**
 > 改 UI 后必须重新生成并烧写 spiffs 分区。
 >
 > **2026-09-03 上板部署会话（5 项修复 + 2 个教训）**：
@@ -230,16 +232,18 @@ All business endpoints use the `/api/` prefix. Returns JSON envelope `{"ok":true
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/status` | open | Device status (WiFi, camera, system) |
-| GET | `/api/config` | open | Current configuration (passwords masked) |
-| POST | `/api/config` | write | Partial config update; first-time password setup when `web_password` is empty |
+| GET | `/api/config` | open | Current configuration (secrets masked) |
+| POST | `/api/config` | open | Partial config update |
 | GET | `/api/capabilities` | open | Board capability flags (12 booleans) |
 | GET | `/api/capture` | open | Single JPEG snapshot (`image/jpeg`, not JSON) |
 | GET | `/api/wifi/scan` | open | WiFi AP scan (guarded by `CONFIG_MIBEECAM_ENABLE_WIFI_SCAN`) |
-| POST | `/api/reset` | write | Factory reset config to defaults |
-| POST | `/api/reboot` | write | Reboot device |
+| POST | `/api/reset` | open | Factory reset config to defaults |
+| POST | `/api/reboot` | open | Reboot device |
 | OPTIONS | `/*` | — | CORS preflight (204 No Content) |
 
-**Auth:** `X-Password` header for write operations. When `web_password` is empty (first boot), all writes return 401 `SET_PASSWORD_FIRST` except `POST /api/config` with a `web_password` field (first-time setup).
+**Auth（2026-09-18 契约 v1.9）**：设备级 Web 密码（X-Password/`web_password`/
+`GET /api/auth`/`SET_PASSWORD_FIRST`）已随密码体系整体移除——所有端点在可信
+局域网内开放（安全边界 = 路由器 WPA2）；AP 模式 WPA2 口令与 WiFi 凭据不受影响。
 
 **MJPEG stream:** Separate TCP server on port `:81` (independent of main web server on port 80).
 
