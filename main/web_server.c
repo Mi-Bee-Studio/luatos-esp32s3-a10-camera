@@ -1085,6 +1085,18 @@ static esp_err_t handler_static(httpd_req_t *req)
         f = fopen(filepath, "r");
     }
     if (!f) {
+        /* 404 带来源对端（issue ai#8 家族部分：设备侧只记 404 不记 URI/IP，
+         * NVR 排障无法对表）——仅记录，不改变响应语义 */
+        char peer[16] = "?";
+        int fd = httpd_req_to_sockfd(req);
+        if (fd >= 0) {
+            struct sockaddr_in sa;
+            socklen_t sl = sizeof(sa);
+            if (lwip_getpeername(fd, (struct sockaddr *)&sa, &sl) == 0) {
+                strlcpy(peer, inet_ntoa(sa.sin_addr), sizeof(peer));
+            }
+        }
+        ESP_LOGW(TAG, "404 %s from %s", uri, peer);
         httpd_resp_send_404(req);
         return ESP_FAIL;
     }
@@ -1329,11 +1341,34 @@ static esp_err_t handler_api_camera_post(httpd_req_t *req)
         newcfg.xclk_freq_mhz = (uint8_t)val;
     }
 
+    /* 未知键回显（契约 v1.9 §5，issue n16r8#27 家族部分）：静默 ok:true
+     * 曾让 "quality" 这类裸键的拼写错误排障半天——现在点名 WARN +
+     * 响应带 ignored 键集（本 handler 实际消费的键即已知集） */
+    static const char *known_keys[] = {
+        "cam_framesize", "cam_quality", "cam_vflip", "cam_hmirror",
+        "xclk_freq_mhz",
+    };
+    cJSON *ignored = cJSON_CreateArray();
+    for (cJSON *child = json->child; child; child = child->next) {
+        if (!child->string) continue;   /* 顶层非对象（数组等）：无键名可点名 */
+        bool known = false;
+        for (size_t i = 0; i < sizeof(known_keys) / sizeof(known_keys[0]); i++) {
+            if (strcmp(child->string, known_keys[i]) == 0) { known = true; break; }
+        }
+        if (!known) cJSON_AddItemToArray(ignored, cJSON_CreateString(child->string));
+    }
+    if (cJSON_GetArraySize(ignored) > 0) {
+        char *names = cJSON_PrintUnformatted(ignored);
+        ESP_LOGW(TAG, "POST /api/camera ignored unknown keys: %s", names ? names : "?");
+        free(names);
+    }
     cJSON_Delete(json);
 
     esp_err_t ret = config_save(&newcfg);
-    if (ret != ESP_OK)
+    if (ret != ESP_OK) {
+        cJSON_Delete(ignored);
         return json_error(req, "save failed", HTTPD_500_INTERNAL_SERVER_ERROR);
+    }
 
     /* 2026-09-03 实测事故：热重配（camera_deinit+init）在 MJPEG/motion/广播
      * 生产者并发取帧时导致设备级静默死亡（fb_count=1 DRAM，无 PSRAM）。
@@ -1343,6 +1378,7 @@ static esp_err_t handler_api_camera_post(httpd_req_t *req)
         cJSON *data = cJSON_CreateObject();
         cJSON_AddStringToObject(data, "status", "saved (rebooting to apply)");
         cJSON_AddBoolToObject(data, "rebooting", true);
+        cJSON_AddItemToObject(data, "ignored", ignored);
         esp_err_t send_ret = json_ok(req, data);
         ESP_LOGW(TAG, "Camera config saved — rebooting to apply (quality=%u res=%u)",
                  newcfg.cam_quality, newcfg.cam_framesize);
