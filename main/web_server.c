@@ -35,6 +35,7 @@
 #include "esp_spiffs.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "esp_app_desc.h"
 #include "cJSON.h"
 #include "config_manager.h"
 #include "wifi_manager.h"
@@ -345,7 +346,8 @@ static esp_err_t handler_api_status(httpd_req_t *req)
     cJSON_AddStringToObject(data, "resolution", res_to_str(cfg->cam_framesize));
 
     cJSON_AddNumberToObject(data, "uptime", (double)(esp_timer_get_time() / 1000000));
-    cJSON_AddStringToObject(data, "firmware_version", "0.3.0");
+    cJSON_AddStringToObject(data, "firmware_version",
+        esp_app_get_description()->version);
 
     float temp = get_chip_temp();
     cJSON_AddNumberToObject(data, "chip_temp", temp);
