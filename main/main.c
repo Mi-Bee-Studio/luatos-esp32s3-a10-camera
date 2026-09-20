@@ -26,8 +26,7 @@
 #include "event_bus.h"
 #include "frame_broadcaster.h"
 #include "webhook.h"
-#include "onvif_discovery.h"
-#include "onvif_service.h"
+#include "onvif_port.h"
 #include "at_command.h"
 #include "esp_http_server.h"
 
@@ -131,28 +130,14 @@ static void wifi_state_cb(wifi_state_t state, void *user_data)
 #endif
 
 #ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
-        /* Step 13.7: ONVIF conditional start */
+        /* Step 13.7: ONVIF conditional start — onvif-c 组件一体启动
+         * （SOAP 注册 + WS-Discovery + mDNS），config 门在 onvif_port 内 */
         {
-            const cam_config_t *cfg = config_get();
-            if (cfg->onvif_enable) {
-                esp_err_t onvif_ret = onvif_discovery_start();
-                if (onvif_ret != ESP_OK) {
-                    ESP_LOGW(TAG, "ONVIF discovery start failed: %s (continuing)", esp_err_to_name(onvif_ret));
-                } else {
-                    httpd_handle_t server = web_server_get_handle();
-                    if (server != NULL) {
-                        onvif_ret = onvif_service_start(server);
-                        if (onvif_ret != ESP_OK) {
-                            ESP_LOGW(TAG, "ONVIF service start failed: %s", esp_err_to_name(onvif_ret));
-                        } else {
-                            ESP_LOGI(TAG, "[13.7/14] ONVIF started (discovery + SOAP service)");
-                        }
-                    } else {
-                        ESP_LOGW(TAG, "ONVIF service skipped (web server handle not available)");
-                    }
-                }
+            esp_err_t onvif_ret = onvif_port_start();
+            if (onvif_ret == ESP_OK) {
+                ESP_LOGI(TAG, "[13.7/14] ONVIF started (onvif-c component)");
             } else {
-                ESP_LOGI(TAG, "ONVIF disabled (config onvif_enable=0)");
+                ESP_LOGW(TAG, "ONVIF start failed/skipped: %s (continuing)", esp_err_to_name(onvif_ret));
             }
         }
 #endif
@@ -378,24 +363,11 @@ void app_main(void)
 #endif
 
 #ifdef CONFIG_MIBEECAM_ENABLE_ONVIF
-        /* Step 13.7: ONVIF conditional start (AP mode) */
+        /* Step 13.7: ONVIF conditional start (AP mode) — onvif-c 组件一体启动 */
         {
-            const cam_config_t *cfg = config_get();
-            if (cfg->onvif_enable) {
-                esp_err_t onvif_ret = onvif_discovery_start();
-                if (onvif_ret != ESP_OK) {
-                    ESP_LOGW(TAG, "ONVIF discovery start failed: %s (continuing)", esp_err_to_name(onvif_ret));
-                } else {
-                    httpd_handle_t server = web_server_get_handle();
-                    if (server != NULL) {
-                        onvif_ret = onvif_service_start(server);
-                        if (onvif_ret != ESP_OK) {
-                            ESP_LOGW(TAG, "ONVIF service start failed: %s", esp_err_to_name(onvif_ret));
-                        } else {
-                            ESP_LOGI(TAG, "[13.7/14] ONVIF started (AP mode, discovery + SOAP)");
-                        }
-                    }
-                }
+            esp_err_t onvif_ret = onvif_port_start();
+            if (onvif_ret == ESP_OK) {
+                ESP_LOGI(TAG, "[13.7/14] ONVIF started (AP mode, onvif-c component)");
             }
         }
 #endif
