@@ -11,7 +11,7 @@
 #include "esp_mac.h"
 #include "esp_log.h"
 
-/* Must match UUID_PREFIX in onvif_discovery.c / onvif_service.c callers. */
+/* Consumed by main/onvif_port.c (onvif-c component uuid/serial callbacks). */
 #define DEVICE_UUID_PREFIX "f472b01e-0000-1000-8000-"
 
 static const char *TAG = "device_id";
