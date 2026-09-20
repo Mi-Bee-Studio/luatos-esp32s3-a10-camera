@@ -27,6 +27,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_http_server.h"
+#include "esp_app_desc.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -47,13 +48,17 @@ static const char *port_ip(void)
     return wifi_get_ip_str();
 }
 
-/* 板级流地址：MJPEG :81（本板无 RTSP）。回调时机构建，IP 断连窗口内
- * 退化为 0.0.0.0 形态——与组件快照默认值同一路径，无需静态缓冲。 */
+/* MJPEG 流端口（本板无 RTSP，:81 为 web_server 流服务器监听口） */
+#define STREAM_HTTP_PORT 81
+
+/* 板级流地址：回调时机构建，IP 断连窗口内退化为 0.0.0.0 形态——与组件
+ * 快照默认值同一路径，无需静态缓冲。 */
 static const char *port_stream_uri(void)
 {
     static char uri[48];
     const char *ip = wifi_get_ip_str();
-    snprintf(uri, sizeof(uri), "http://%s:81/stream", ip ? ip : "0.0.0.0");
+    snprintf(uri, sizeof(uri), "http://%s:%d/stream",
+             ip ? ip : "0.0.0.0", STREAM_HTTP_PORT);
     return uri;
 }
 
@@ -73,7 +78,7 @@ esp_err_t onvif_port_start(void)
 
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    char hostname[32];
+    static char hostname[32];   /* cfg 浅拷贝持有指针，须与 cfg 同寿 */
     snprintf(hostname, sizeof(hostname), "mibeecam-%02x%02x",
              mac[4], mac[5]);
 
@@ -81,7 +86,7 @@ esp_err_t onvif_port_start(void)
         .manufacturer     = "MiBee",
         .model            = "MiBeeCam",
         .hardware_id      = "ESP32-S3",
-        .firmware_version = "v0.1.0",
+        .firmware_version = esp_app_get_description()->version,
         .serial           = port_serial,
         .uuid             = port_uuid,
         .ip               = port_ip,
