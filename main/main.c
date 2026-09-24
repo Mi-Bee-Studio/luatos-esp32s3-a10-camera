@@ -13,6 +13,7 @@
 #include "driver/gpio.h"
 
 #include "config_manager.h"
+#include "watchdog.h"
 #include "wifi_manager.h"
 #include "csi_motion.h"
 #include "wifi_channel_health.h"
@@ -194,6 +195,7 @@ static void boot_btn_task(void *arg)
  * ---------------------------------------------------------------------------*/
 void app_main(void)
 {
+    watchdog_init();
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  MiBeeCam - ESP32-S3-A10");
     ESP_LOGI(TAG, "========================================");

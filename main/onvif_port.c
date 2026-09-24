@@ -94,6 +94,7 @@ esp_err_t onvif_port_start(void)
         .frame_rate       = port_frame_rate,
         .events_enabled   = NULL,   /* 本板无事件能力（无 CSI） */
         .http_port        = 80,
+        .wdt_watch_discovery = true,
         .mdns_hostname    = hostname,
         .mdns_instance    = "MiBee Cam",
     };

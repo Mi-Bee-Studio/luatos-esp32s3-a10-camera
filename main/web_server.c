@@ -29,6 +29,7 @@
  */
 
 #include "web_server.h"
+#include "watchdog.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_wifi.h"
@@ -348,6 +349,7 @@ static esp_err_t handler_api_status(httpd_req_t *req)
     cJSON_AddNumberToObject(data, "uptime", (double)(esp_timer_get_time() / 1000000));
     cJSON_AddStringToObject(data, "firmware_version",
         esp_app_get_description()->version);
+    watchdog_attach_status(data);
 
     float temp = get_chip_temp();
     cJSON_AddNumberToObject(data, "chip_temp", temp);
@@ -809,7 +811,7 @@ static esp_err_t handler_capabilities(httpd_req_t *req)
     /* 契约 v1.0：12 个布尔能力位 + api_version/wifi_scan（见 docs/api-contract.md）
      * v1.7（2026-09-09）：CSI 调参键族 csi_* 六键 + POST /api/csi/calibrate（本板
      * CSI-off 生产形态：键接受存储、calibrate 恒 404、csi_motion 能力位不出） */
-    cJSON_AddStringToObject(data, "api_version", "1.9");
+    cJSON_AddStringToObject(data, "api_version", "1.10");
 #ifdef CONFIG_MIBEECAM_ENABLE_WIFI_SCAN
     cJSON_AddBoolToObject(data, "wifi_scan", true);
 #else
