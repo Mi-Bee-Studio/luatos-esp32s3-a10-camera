@@ -161,7 +161,7 @@ luatos-esp32s3-a10-camera/
 
 ## 🔌 硬件规格
 
-### 开发板与传感器
+### 板子概要
 
 | 项目 | 规格 |
 |------|------|
@@ -171,7 +171,9 @@ luatos-esp32s3-a10-camera/
 | **PSRAM** | 8 MB 八线制（物理存在，**在固件中禁用** — 时序调谐失败） |
 | **CPU** | ESP32-S3 双核 240 MHz |
 | **连接** | WiFi 2.4 GHz（802.11 b/g/n） |
+| **USB** | USB Type-C（USB-Serial-JTAG：供电 + 控制台 + 烧录） |
 | **电源** | 5 V / 2 A 通过 USB-C |
+| **帧缓冲** | 仅 DRAM，`fb_count=1`（PSRAM 已禁用——见 AGENTS.md） |
 
 ### GPIO 引脚映射
 
@@ -188,6 +190,34 @@ luatos-esp32s3-a10-camera/
 | RESET | −1 | 已禁用 |
 
 > **注意** — 这些引脚使用 `esp32-camera` 组件中的 `CAMERA_MODEL_Air_ESP32S3` 定义，**不是**来自 LuatOS 文档的引脚映射。
+
+### 引脚位置图（USB-C 朝上，正面/元件面视角；功能引脚图）
+
+```
+                 ┌─ USB-C ─┐
+                 │  OV2640  │
+                 │ ESP32-S3 │   16MB flash · PSRAM 关闭（DRAM fb_count=1）
+                 │   A10    │
+                 └──────────┘
+  相机(SCCB) → SIOD=IO21 · SIOC=IO46          XCLK=IO39
+  相机数据  → D0=IO34 · D1=IO47 · D2=IO48 · D3=IO33
+              D4=IO35 · D5=IO37 · D6=IO38 · D7=IO40
+  相机时序  → VSYNC=IO42 · HREF=IO41 · PCLK=IO36
+  PWDN/RESET → 已禁用（-1）
+```
+
+### 固件基线规范
+
+两条基线对所有 MiBee 固件仓强制执行：
+
+1. **看门狗：必须启用。** ✅ 本固件：ESP-IDF 任务看门狗
+   （`CONFIG_ESP_TASK_WDT_INIT=y`，TWDT 30s、超时 panic）；
+2. **Web/API 固件升级（OTA）：硬件允许则必须提供。**
+   ⚠️ **缺口——尚未达标。** 本板硬件明确允许（板载 WiFi + 16MB flash，
+   目前只用了单 factory 3.5MB 槽），但固件**尚无 OTA 数据通路**：升级只能
+   有线烧录（经 serialtap/USB 走 esptool）。规划：分区表重排为 OTA 双槽 +
+   移植家族 `/api/ota` 端点（参考姊妹仓）。在此之前，现场升级一律按台架
+   操作对待。
 
 ### 内存分区
 

@@ -167,7 +167,7 @@ luatos-esp32s3-a10-camera/
 
 ## 🔌 Hardware Specifications
 
-### Board & Sensor
+### Board Overview
 
 | Item | Specification |
 |------|---------------|
@@ -177,7 +177,9 @@ luatos-esp32s3-a10-camera/
 | **PSRAM** | 8 MB Octal (physically present, **disabled** in firmware — timing tuning failed) |
 | **CPU** | ESP32-S3 dual-core 240 MHz |
 | **Connectivity** | WiFi 2.4 GHz (802.11 b/g/n) |
+| **USB** | USB Type-C (USB-Serial-JTAG; power + console + flashing) |
 | **Power** | 5 V / 2 A via USB-C |
+| **Frame buffers** | DRAM only, `fb_count=1` (PSRAM disabled — see AGENTS.md) |
 
 ### GPIO Pin Mapping
 
@@ -194,6 +196,35 @@ luatos-esp32s3-a10-camera/
 | RESET | −1 | Disabled |
 
 > **Note** — These pins use the `CAMERA_MODEL_Air_ESP32S3` definition from the `esp32-camera` component, **not** the LuatOS documentation pinout.
+
+### Pinout Diagram (USB-C pointing up, front/component-side view; functional pin map)
+
+```
+                 ┌─ USB-C ─┐
+                 │  OV2640  │
+                 │ ESP32-S3 │   16 MB flash · PSRAM off (DRAM fb_count=1)
+                 │   A10    │
+                 └──────────┘
+  Camera (SCCB) → SIOD=IO21 · SIOC=IO46        XCLK=IO39
+  Camera bus    → D0=IO34 · D1=IO47 · D2=IO48 · D3=IO33
+                  D4=IO35 · D5=IO37 · D6=IO38 · D7=IO40
+  Camera timing → VSYNC=IO42 · HREF=IO41 · PCLK=IO36
+  PWDN/RESET    → disabled (-1)
+```
+
+### Firmware Baseline Norms
+
+Two baselines are mandatory fleet-wide for every MiBee firmware repo:
+
+1. **Watchdog: mandatory.** ✅ This firmware: ESP-IDF task watchdog
+   (`CONFIG_ESP_TASK_WDT_INIT=y`, TWDT 30 s, panic on timeout).
+2. **Web/API firmware upgrade (OTA): mandatory where the hardware allows.**
+   ⚠️ **GAP — not yet compliant.** The hardware clearly allows it (WiFi onboard +
+   16 MB flash with only a single 3.5 MB factory slot used today), but this
+   firmware ships **no OTA data path**: upgrades are wired-only (esptool via
+   serialtap/USB). Roadmap: re-plan the partition table into dual OTA slots and
+   port the family `/api/ota` endpoints (see the sister repos). Until then,
+   treat every field upgrade as a bench operation.
 
 ### Memory Partition
 
