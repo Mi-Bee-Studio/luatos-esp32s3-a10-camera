@@ -4,8 +4,12 @@
  *               → AP/STA → time_sync → streamer → web_server → motion → boot_btn
  */
 
+#include <stdio.h>
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_chip_info.h"
+#include "esp_flash.h"
+#include "esp_psram.h"
 #include "esp_spiffs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -258,6 +262,29 @@ void app_main(void)
             ESP_LOGI(TAG, "[5/14] Camera initialized (%s, %d fps, quality %d)",
                      camera_get_sensor_name(), cam_cfg->cam_fps, cam_cfg->cam_quality);
         }
+    }
+
+    /* SELFTEST 自检行（工作区 AGENTS.md"固件自检行"规范）：一行可 grep
+     * 的开机体检证据，serialtap 按前缀聚合做台架异常发现。本板无
+     * PSRAM（psram=none 属正常），wifi 部分由 wifi_connect_and_pick
+     * 的开机快扫补一行 SELFTEST: wifi ...。 */
+    {
+        esp_chip_info_t ci;
+        esp_chip_info(&ci);
+        uint32_t flsz = 0;
+        esp_flash_get_size(NULL, &flsz);
+        size_t psz = 0;
+#if CONFIG_SPIRAM    /* v5.5 的 esp_psram_get_size 受 CONFIG_SPIRAM 条件编译，无 PSRAM 板符号不存在 */
+        psz = esp_psram_get_size();
+#endif
+        char psram_str[12];
+        if (psz) snprintf(psram_str, sizeof(psram_str), "%uMB", (unsigned)(psz >> 20));
+        else     strlcpy(psram_str, "none", sizeof(psram_str));
+        ESP_LOGI(TAG, "SELFTEST: board=luatos-esp32s3-a10-camera fw=v0.1 chip=%s rev=v%d.%d"
+                      " cores=%u flash=%uMB psram=%s sensor=%s heap=%uKB",
+                 CONFIG_IDF_TARGET, ci.revision / 100, ci.revision % 100, ci.cores,
+                 (unsigned)(flsz >> 20), psram_str, camera_get_sensor_name(),
+                 (unsigned)(esp_get_free_heap_size() >> 10));
     }
 
     /* Step 5.5: Frame broadcaster init (provides frame cache for motion/stream) */
