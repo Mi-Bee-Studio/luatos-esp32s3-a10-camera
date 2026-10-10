@@ -34,6 +34,8 @@ typedef struct {
     char     wifi_ssid_2[33];            /* 备用网络，空=禁用 */
     char     wifi_pass_2[65];            /* 敏感 */
     char     timezone[48];               /* POSIX TZ，str<=47（契约 §3.1）*/
+    char     ntp_server1[64];            /* 契约 v2.1：SNTP 源 1，空 = 内置公网池 */
+    char     ntp_server2[64];            /* 契约 v2.1：SNTP 源 2，空 = 内置公网池 */
     uint8_t  cam_framesize;              /* framesize_t 刻度（10-15）；本板上限 VGA=10 */
     uint8_t  cam_fps;                    /* 1-30，默认 15 */
     uint8_t  cam_quality;                /* 10-63（PIT-021），默认 12 */
@@ -108,6 +110,11 @@ esp_err_t config_set(const cam_config_t *config);
  * @brief 获取时区字符串
  */
 const char *config_get_timezone(void);
+
+/** 契约 v2.1：SNTP 源（空串 = 清回内置公网池）。 */
+const char *config_get_ntp_server1(void);
+const char *config_get_ntp_server2(void);
+esp_err_t config_set_ntp_servers(const char *s1, const char *s2);
 
 /**
  * @brief 获取配置为 JSON 对象（契约字段名；密码类掩码 "****"）

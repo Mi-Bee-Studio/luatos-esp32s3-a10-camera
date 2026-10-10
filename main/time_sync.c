@@ -1,4 +1,5 @@
 #include "time_sync.h"
+#include "config_manager.h"
 #include "esp_sntp.h"
 #include <time.h>
 #include <sys/time.h>
@@ -18,8 +19,14 @@ esp_err_t time_sync_init(const char *timezone) {
     tzset();
 
     // Configure SNTP
+    /* 契约 v2.1：SNTP 源可配（ONVIF SetNTP）；空键回落公网池 */
+    const char *s1 = config_get_ntp_server1();
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_setservername(0, s1[0] ? s1 : "pool.ntp.org");
+    {
+        const char *s2 = config_get_ntp_server2();
+        if (s2[0]) esp_sntp_setservername(1, s2);
+    }
     esp_sntp_init();
 
     ESP_LOGI(TAG, "SNTP initialized, timezone: %s", timezone);
@@ -74,4 +81,9 @@ esp_err_t time_set_manual(int year, int month, int day, int hour, int min, int s
     ESP_LOGI(TAG, "Manual time set: %04d-%02d-%02d %02d:%02d:%02d", 
              year, month, day, hour, min, sec);
     return ESP_OK;
+}
+esp_err_t time_sync_restart(const char *timezone)
+{
+    esp_sntp_stop();   /* issue #43：配置源变更后重启 SNTP（幂等） */
+    return time_sync_init(timezone);
 }

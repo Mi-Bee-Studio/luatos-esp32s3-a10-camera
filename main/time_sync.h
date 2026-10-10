@@ -4,6 +4,9 @@
 #include <stdbool.h>
 
 esp_err_t time_sync_init(const char *timezone);
+
+/** 用最新 ntp_server1/2 配置重启 SNTP（issue #43）。 */
+esp_err_t time_sync_restart(const char *timezone);
 bool time_is_synced(void);
 void time_get_str(char *buf, size_t len);
 esp_err_t time_set_manual(int year, int month, int day, int hour, int min, int sec);

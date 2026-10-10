@@ -246,6 +246,8 @@ KEY_ASSERT("wifi_pass");
 KEY_ASSERT("wifi_ssid_2");
 KEY_ASSERT("wifi_pass_2");
 KEY_ASSERT("timezone");
+KEY_ASSERT("ntp_server1");
+KEY_ASSERT("ntp_server2");
 KEY_ASSERT("cam_framesize");
 KEY_ASSERT("cam_fps");
 KEY_ASSERT("cam_quality");
@@ -312,6 +314,8 @@ static void load_keys_from_nvs(nvs_handle_t h, cam_config_t *cfg)
     rd_str(h, "wifi_ssid_2",   cfg->wifi_ssid_2,   sizeof(cfg->wifi_ssid_2));
     rd_str(h, "wifi_pass_2",   cfg->wifi_pass_2,   sizeof(cfg->wifi_pass_2));
     rd_str(h, "timezone",      cfg->timezone,      sizeof(cfg->timezone));
+    rd_str(h, "ntp_server1",   cfg->ntp_server1,   sizeof(cfg->ntp_server1));
+    rd_str(h, "ntp_server2",   cfg->ntp_server2,   sizeof(cfg->ntp_server2));
     rd_u8(h, "cam_framesize", &cfg->cam_framesize);
     rd_u8(h, "cam_fps",       &cfg->cam_fps);
     rd_u8(h, "cam_quality",   &cfg->cam_quality);
@@ -349,6 +353,8 @@ static void write_keys_to_nvs(nvs_handle_t h, const cam_config_t *cfg)
     wr_str(h, "wifi_ssid_2",  cfg->wifi_ssid_2);
     wr_str(h, "wifi_pass_2",  cfg->wifi_pass_2);
     wr_str(h, "timezone",     cfg->timezone);
+    wr_str(h, "ntp_server1",  cfg->ntp_server1);
+    wr_str(h, "ntp_server2",  cfg->ntp_server2);
     wr_u8(h, "cam_framesize", cfg->cam_framesize);
     wr_u8(h, "cam_fps",      cfg->cam_fps);
     wr_u8(h, "cam_quality",  cfg->cam_quality);
@@ -733,6 +739,19 @@ const char *config_get_timezone(void)
     return s_config.timezone;
 }
 
+const char *config_get_ntp_server1(void) { return s_config.ntp_server1; }
+const char *config_get_ntp_server2(void) { return s_config.ntp_server2; }
+
+esp_err_t config_set_ntp_servers(const char *s1, const char *s2)
+{
+    config_lock();
+    strlcpy(s_config.ntp_server1, s1 ? s1 : "", sizeof(s_config.ntp_server1));
+    strlcpy(s_config.ntp_server2, s2 ? s2 : "", sizeof(s_config.ntp_server2));
+    config_unlock();
+    ESP_LOGI(TAG, "NTP servers set: [%s] [%s]", s_config.ntp_server1, s_config.ntp_server2);
+    return config_save(&s_config);
+}
+
 cJSON *config_get_json(void)
 {
     cJSON *root = cJSON_CreateObject();
@@ -751,6 +770,8 @@ cJSON *config_get_json(void)
     cJSON_AddStringToObject(root, "wifi_ssid_2", cfg.wifi_ssid_2);
     cJSON_AddStringToObject(root, "wifi_pass_2", cfg.wifi_pass_2[0] ? "****" : "");
     cJSON_AddStringToObject(root, "timezone", cfg.timezone);
+    cJSON_AddStringToObject(root, "ntp_server1", cfg.ntp_server1);
+    cJSON_AddStringToObject(root, "ntp_server2", cfg.ntp_server2);
     cJSON_AddNumberToObject(root, "cam_framesize", (double)cfg.cam_framesize);
     cJSON_AddNumberToObject(root, "cam_fps", (double)cfg.cam_fps);
     cJSON_AddNumberToObject(root, "cam_quality", (double)cfg.cam_quality);
