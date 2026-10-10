@@ -474,6 +474,46 @@ static int boot_pick_scan(const char *p1, const char *p2)
         wifi_ap_record_t *recs = malloc(sizeof(wifi_ap_record_t) * (n ? n : 1));
         if (recs) {
             if (esp_wifi_scan_get_ap_records(&n, recs) == ESP_OK) {
+                /* SELFTEST 自检行（wifi 部分，工作区 AGENTS.md"固件自检行"
+                 * 规范）：最强 5 BSS + 配置网 RSSI。serialtap 按前缀聚合做
+                 * 台架异常发现；设备日志含真实 SSID（本地日志不入仓）。 */
+                {
+                    char top_str[240] = "-";
+                    size_t off = 0;
+                    int top = n < 5 ? n : 5;
+                    for (int i = 0; i < top; i++) {
+                        char item[56];
+                        int wl = snprintf(item, sizeof(item), "%s%ddBm ch%u %.24s",
+                                          off ? "; " : "", recs[i].rssi,
+                                          (unsigned)recs[i].primary,
+                                          (const char *)recs[i].ssid);
+                        if (wl < 0 || off + (size_t)wl + 1 > sizeof(top_str)) break;
+                        memcpy(top_str + off, item, (size_t)wl + 1);
+                        off += (size_t)wl;
+                    }
+                    char ours_str[100] = "-";
+                    if (p1[0] || p2[0]) {
+                        ours_str[0] = '\0';
+                        for (int c = 0; c < 2; c++) {
+                            const char *ssid = c ? p2 : p1;
+                            if (!ssid[0]) continue;
+                            int8_t best = -128;
+                            for (uint16_t i = 0; i < n; i++) {
+                                if (strcmp((const char *)recs[i].ssid, ssid) == 0 &&
+                                    recs[i].rssi > best) {
+                                    best = recs[i].rssi;
+                                }
+                            }
+                            char item[52];
+                            snprintf(item, sizeof(item), "%s%.24s=%ddBm",
+                                     ours_str[0] ? "," : "", ssid, best);
+                            strlcat(ours_str, item, sizeof(ours_str));
+                        }
+                    }
+                    ESP_LOGI(TAG, "SELFTEST: wifi aps=%u top=\"%s\" ours=\"%s\"",
+                             (unsigned)n, top_str, ours_str);
+                }
+                if (p2[0]) {
                 int8_t r1 = -128, r2 = -128;
                 for (uint16_t i = 0; i < n; i++) {
                     if (strcmp((const char *)recs[i].ssid, p1) == 0 && recs[i].rssi > r1) r1 = recs[i].rssi;
@@ -490,6 +530,7 @@ static int boot_pick_scan(const char *p1, const char *p2)
                     ESP_LOGI(TAG, "boot pick: primary not on air, backup %ddBm → backup", r2);
                 } else {
                     ESP_LOGW(TAG, "boot pick: neither net visible — using last_net");
+                }
                 }
             }
             free(recs);
@@ -607,8 +648,12 @@ esp_err_t wifi_start_sta_boot(void)
 
     s_active_ssid_index = (load_last_net() && secondary_configured()) ? 1 : 0;
 
-    if (secondary_configured() && strcmp(cfg->wifi_ssid, cfg->wifi_ssid_2) != 0) {
-        int pick = boot_pick_scan(cfg->wifi_ssid, cfg->wifi_ssid_2);
+    /* 开机快扫两用：SELFTEST 自检行总是打（单网也扫）；双网异名才择优。
+     * 择优传真实备网，单网传 ""（boot_pick_scan 内 p2 空串=跳过择优）。 */
+    {
+        const char *p2 = (secondary_configured() && strcmp(cfg->wifi_ssid, cfg->wifi_ssid_2) != 0)
+                         ? cfg->wifi_ssid_2 : "";
+        int pick = boot_pick_scan(cfg->wifi_ssid, p2);
         if (pick >= 0) {
             s_active_ssid_index = pick;
         }
